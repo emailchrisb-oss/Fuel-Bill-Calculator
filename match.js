@@ -399,6 +399,76 @@
     return out;
   }
 
+  // ---------- yearly miles ----------
+
+  // Compact coordinates for fields a Texas-based Lear/CJ group plausibly
+  // uses; legs between unknown fields fall back to hours x cruise speed.
+  const AIRPORT_COORDS = {
+    KAUS: [30.19, -97.67], KDAL: [32.85, -96.85], KDFW: [32.90, -97.04], KADS: [32.97, -96.84],
+    KHOU: [29.65, -95.28], KIAH: [29.98, -95.34], KSAT: [29.53, -98.47], KELP: [31.81, -106.38],
+    KMAF: [31.94, -102.20], KLBB: [33.66, -101.82], KAMA: [35.22, -101.71], KOKC: [35.39, -97.60],
+    KTUL: [36.20, -95.89], KICT: [37.65, -97.43], KMCI: [39.30, -94.71], KSTL: [38.75, -90.37],
+    KMEM: [35.04, -89.98], KBNA: [36.12, -86.68], KATL: [33.64, -84.43], KMIA: [25.79, -80.29],
+    KFLL: [26.07, -80.15], KPBI: [26.68, -80.10], KMCO: [28.43, -81.31], KTPA: [27.98, -82.53],
+    KJAX: [30.49, -81.69], KORD: [41.98, -87.90], KMDW: [41.79, -87.75], KMKE: [42.95, -87.90],
+    KMSP: [44.88, -93.22], KOMA: [41.30, -95.89], KDEN: [39.86, -104.67], KAPA: [39.57, -104.85],
+    KASE: [39.22, -106.87], KEGE: [39.64, -106.92], KGUC: [38.53, -106.93], KMTJ: [38.51, -107.89],
+    KJAC: [43.61, -110.74], KSUN: [43.50, -114.30], KBZN: [45.78, -111.15], KSLC: [40.79, -111.98],
+    KLAS: [36.08, -115.15], KHND: [35.97, -115.13], KPHX: [33.43, -112.01], KSDL: [33.62, -111.91],
+    KTUS: [32.12, -110.94], KABQ: [35.04, -106.61], KSAF: [35.62, -106.09], KLAX: [33.94, -118.41],
+    KVNY: [34.21, -118.49], KBUR: [34.20, -118.36], KSNA: [33.68, -117.87], KSAN: [32.73, -117.19],
+    KSFO: [37.62, -122.38], KOAK: [37.72, -122.22], KSJC: [37.36, -121.93], KSEA: [47.45, -122.31],
+    KBFI: [47.53, -122.30], KPDX: [45.59, -122.60], KTEB: [40.85, -74.06], KJFK: [40.64, -73.78],
+    KLGA: [40.78, -73.87], KEWR: [40.69, -74.17], KHPN: [41.07, -73.71], KBOS: [42.36, -71.01],
+    KBED: [42.47, -71.29], KPHL: [39.87, -75.24], KBWI: [39.18, -76.67], KDCA: [38.85, -77.04],
+    KIAD: [38.95, -77.46], KCLT: [35.21, -80.94], KRDU: [35.88, -78.79], KSAV: [32.13, -81.20],
+    KCHS: [32.90, -80.04], KHXD: [32.22, -80.70], KMSY: [29.99, -90.26], KNEW: [30.04, -90.03],
+    KBTR: [30.53, -91.15], KGPT: [30.41, -89.08], KDTW: [42.21, -83.35], KCLE: [41.41, -81.85],
+    KPIT: [40.49, -80.23], KCMH: [40.00, -82.89], KIND: [39.72, -86.29], KEYW: [24.56, -81.76],
+    KAPF: [26.15, -81.78], KRSW: [26.54, -81.76], KSRQ: [27.40, -82.55], KOPF: [25.91, -80.28],
+    KFXE: [26.20, -80.17], KBCT: [26.38, -80.11], KTRK: [39.32, -120.14], KRNO: [39.50, -119.77],
+    KHDN: [40.48, -107.22], KRIL: [39.53, -107.73], KTEX: [37.95, -107.90], KDRO: [37.15, -107.75],
+    KCOS: [38.81, -104.70], KBJC: [39.91, -105.12], KGJT: [39.12, -108.53], KBOI: [43.56, -116.22],
+    KBIL: [45.81, -108.54], KCOD: [44.52, -109.02], KRAP: [44.05, -103.06], KFSD: [43.58, -96.74],
+  };
+
+  function coordsFor(code) {
+    const n = normAirport(code);
+    if (!n) return null;
+    return AIRPORT_COORDS[n] || (n.length === 3 ? AIRPORT_COORDS["K" + n] : null) || null;
+  }
+
+  // Great-circle distance in nautical miles.
+  function airportNM(a, b) {
+    const ca = coordsFor(a), cb = coordsFor(b);
+    if (!ca || !cb) return null;
+    const rad = Math.PI / 180;
+    const dLat = (cb[0] - ca[0]) * rad, dLon = (cb[1] - ca[1]) * rad;
+    const h = Math.sin(dLat / 2) ** 2 +
+      Math.cos(ca[0] * rad) * Math.cos(cb[0] * rad) * Math.sin(dLon / 2) ** 2;
+    return 2 * 3440.065 * Math.asin(Math.sqrt(h));
+  }
+
+  // Year's flying per tail: exact great-circle where both fields are known,
+  // hours x cruise speed otherwise, and an honest count of legs it couldn't
+  // measure at all. speeds maps normalized tail -> cruise knots.
+  function yearlyMiles(legs, year, speeds) {
+    speeds = speeds || {};
+    const by = {};
+    for (const leg of legs) {
+      if (!leg.date || !leg.tail || leg.date.slice(0, 4) !== String(year)) continue;
+      const t = normTail(leg.tail);
+      if (!by[t]) by[t] = { tail: t, nm: 0, legs: 0, estimated: 0, skipped: 0 };
+      const b = by[t];
+      const d = airportNM(leg.from, leg.to);
+      if (d !== null && d > 0) { b.nm += d; b.legs++; }
+      else if (typeof leg.hours === "number" && leg.hours > 0 && speeds[t] > 0) {
+        b.nm += leg.hours * speeds[t]; b.legs++; b.estimated++;
+      } else { b.skipped++; }
+    }
+    return Object.keys(by).sort().map((t) => ({ ...by[t], nm: Math.round(by[t].nm) }));
+  }
+
   // ---------- per-family bills ----------
 
   // Group a statement's lines into one itemized bill per family.
@@ -451,6 +521,7 @@
     normAirport, airportsEqual, dateDiffDays, extractInvoiceFields,
     matchFuelToLegs, buildStatement, statementCSV, monthlyChecks,
     familyBills, familyBillText, familyBillCSV,
+    airportNM, yearlyMiles,
   };
 
   if (typeof module !== "undefined" && module.exports) module.exports = FuelMatch;

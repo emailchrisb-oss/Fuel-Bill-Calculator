@@ -293,6 +293,30 @@ const juneOnly = FM.monthlyChecks(chkLegs, chkFuel, gph, "2026-06");
 check("check month filter", juneOnly.every((x) => x.month === "2026-06"));
 eq("check month filter count", juneOnly.length, 2);
 
+// ---------- yearly miles ----------
+const ausDal = FM.airportNM("KAUS", "KDAL");
+check("nm AUS-DAL plausible", ausDal > 150 && ausDal < 185);
+check("nm K-prefix tolerant", Math.abs(FM.airportNM("AUS", "DAL") - ausDal) < 0.01);
+eq("nm unknown airport", FM.airportNM("KAUS", "XXXX"), null);
+
+const mileLegs = [
+  { date: "2026-06-03", tail: "N318SA", from: "KAUS", to: "KASE" },          // exact
+  { date: "2026-06-05", tail: "N318SA", from: "KASE", to: "KAUS" },          // exact
+  { date: "2026-07-01", tail: "N318SA", from: "", to: "", hours: 2.0 },      // estimated
+  { date: "2026-07-02", tail: "N318SA", from: "", to: "" },                  // skipped
+  { date: "2025-05-01", tail: "N318SA", from: "KAUS", to: "KDAL" },          // wrong year
+  { date: "2026-06-10", tail: "N929MM", from: "KAUS", to: "KHOU" },          // other tail
+];
+const ym = FM.yearlyMiles(mileLegs, 2026, { N318SA: 445, N929MM: 380 });
+eq("miles tails", ym.length, 2);
+const lear = ym.find((m) => m.tail === "N318SA");
+eq("miles legs counted", lear.legs, 3);
+eq("miles estimated count", lear.estimated, 1);
+eq("miles skipped count", lear.skipped, 1);
+check("miles total plausible", lear.nm > 1900 && lear.nm < 2400); // 2x ~600 + 890
+const cj = ym.find((m) => m.tail === "N929MM");
+check("miles cj plausible", cj.nm > 100 && cj.nm < 200);
+
 // ---------- PDF extraction (synthetic Flate-compressed PDF) ----------
 function buildPdf(text) {
   const lines = text.split("\n");
