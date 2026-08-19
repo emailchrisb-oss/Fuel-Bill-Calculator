@@ -1,2 +1,3 @@
-# Fuel-Bill-Calculator
-Fuel bill calculator for airplane 
+# Fuel Bill Splitter
+
+Fuel Bill Splitter is a zero-dependency, single-page web app that ties each World Fuel invoice to the owner family that was flying that day, for a Lear 45 and a CJ1+ shared equally by four families. It uses the Airplane Manager flight log as the source of who flew which leg, matches each fuel uplift to a leg by tail number, date, and airport (with review flags instead of silent guesses when a match is ambiguous), and produces per-family monthly statements you can download as CSV or print. The whole app is `index.html` plus `match.js`, served by GitHub Pages — all data stays in the browser and nothing is uploaded anywhere.
