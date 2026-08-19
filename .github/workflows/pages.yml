@@ -6,16 +6,40 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
   pages: write
   id-token: write
+  actions: write
 
 concurrency:
-  group: pages
+  group: pages-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: node run_tests.js
+        working-directory: tests
+
+  # The github-pages environment only allows deployments from the gh-pages
+  # branch, so pushes to main sync gh-pages and re-run this workflow there.
+  sync:
+    if: github.ref == 'refs/heads/main'
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: |
+          git push --force origin HEAD:gh-pages
+          gh workflow run pages.yml --ref gh-pages
+        env:
+          GH_TOKEN: ${{ github.token }}
+
   deploy:
+    if: github.ref == 'refs/heads/gh-pages'
+    needs: test
     runs-on: ubuntu-latest
     environment:
       name: github-pages
@@ -23,8 +47,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/configure-pages@v5
-        with:
-          enablement: true
       - uses: actions/upload-pages-artifact@v3
         with:
           path: "."
