@@ -1,3 +1,9 @@
 # Fuel Bill Splitter
 
-Fuel Bill Splitter is a zero-dependency, single-page web app that ties each World Fuel invoice to the owner family that was flying that day, for a Lear 45 and a CJ1+ shared equally by four families. It uses the Airplane Manager flight log as the source of who flew which leg, matches each fuel uplift to a leg by tail number, date, and airport (with review flags instead of silent guesses when a match is ambiguous), and produces per-family monthly statements you can download as CSV or print. The whole app is `index.html` plus `match.js`, served by GitHub Pages — all data stays in the browser and nothing is uploaded anywhere.
+Private tool for a two-plane, four-family ownership group (Lear 45 + Citation CJ1+).
+Matches World Fuel invoices to the Airplane Manager flight log, splits fuel cost by
+who was flying, flags months where flight time outruns the invoices, and produces
+per-family itemized bills to email, text, print, or export. Everything runs in the
+browser; no data leaves the device.
+
+Run tests: cd tests && node run_tests.js (expect exit 0).

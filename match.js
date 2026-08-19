@@ -52,7 +52,24 @@
       from: find([/^from$/, /^orig/, /origin|depart(?!.*time)/], notTime),
       to: find([/^to$/, /^dest/, /destination|arriv(?!.*time)/], notTime),
       owner: find([/owner/, /client|customer|account|charter|lessee/, /passenger|pax(?!.*count)|lead|name/], /count|#|no\./),
+      time: find([/flight.?time|block.?time|duration|hobbs/, /total.?time/, /\b(hrs|hours)\b/], /dep|arr|etd|eta|sched|out\b|off\b|on\b|in\b|local|utc|zulu/),
     };
+  }
+
+  // "2.5", "2:30", or aviation-style "2+30" -> decimal hours; null if unusable.
+  function parseDuration(s) {
+    if (s == null) return null;
+    s = String(s).trim();
+    let m;
+    if ((m = s.match(/^(\d{1,3})[:+](\d{1,2})(?::\d{1,2})?$/))) {
+      const h = +m[1] + +m[2] / 60;
+      return h > 0 ? h : null;
+    }
+    if ((m = s.match(/^(\d{1,3}(?:\.\d+)?)$/))) {
+      const h = +m[1];
+      return h > 0 ? h : null;
+    }
+    return null;
   }
 
   // ---------- normalization ----------
@@ -323,10 +340,117 @@
     return rows.map((r) => r.map(esc).join(",")).join("\n") + "\n";
   }
 
+  // ---------- missing-bill checks ----------
+
+  // Compare each aircraft-month's flying against its invoices and flag the
+  // gaps a lost invoice would leave. gphByTail maps normalized tail ->
+  // gallons/hour; without it (or without a flight-time column) the
+  // hours-vs-gallons comparison is skipped but the structural flags still run.
+  // month: "YYYY-MM" to check one month, null for all.
+  function monthlyChecks(legs, entries, gphByTail, month) {
+    gphByTail = gphByTail || {};
+    const buckets = {};
+    function bucket(tail, m) {
+      const key = tail + "|" + m;
+      if (!buckets[key]) buckets[key] = { tail: tail, month: m, flights: 0, hours: 0, hasHours: false, billed: 0, gallons: 0 };
+      return buckets[key];
+    }
+    for (const leg of legs) {
+      if (!leg.date || !leg.tail) continue;
+      const m = leg.date.slice(0, 7);
+      if (month && m !== month) continue;
+      const b = bucket(normTail(leg.tail), m);
+      b.flights++;
+      if (typeof leg.hours === "number" && leg.hours > 0) { b.hours += leg.hours; b.hasHours = true; }
+    }
+    for (const e of entries) {
+      if (!e.date || !e.tail) continue;
+      const m = e.date.slice(0, 7);
+      if (month && m !== month) continue;
+      const b = bucket(normTail(e.tail), m);
+      b.billed++;
+      b.gallons += e.gallons || 0;
+    }
+    const out = [];
+    for (const key of Object.keys(buckets).sort()) {
+      const b = buckets[key];
+      const gph = gphByTail[b.tail];
+      if (b.flights > 0 && b.billed === 0) {
+        out.push({ ...b, level: "warn", message: b.tail + " " + b.month + ": " + b.flights + " flight" + (b.flights > 1 ? "s" : "") + " but no fuel bills — possible missing invoice" });
+        continue;
+      }
+      if (b.flights === 0 && b.billed > 0) {
+        out.push({ ...b, level: "warn", message: b.tail + " " + b.month + ": " + b.billed + " fuel bill" + (b.billed > 1 ? "s" : "") + " but no flights in the log — check the bill's date/tail or the log export" });
+        continue;
+      }
+      if (gph > 0 && b.hasHours) {
+        const expected = b.hours * gph;
+        // Tankering and price-shopping make fuel lumpy month to month, so
+        // only a substantial shortfall (>30%) is worth an alarm.
+        if (b.gallons < expected * 0.7) {
+          out.push({ ...b, expected: expected, level: "warn", message: b.tail + " " + b.month + ": " + b.hours.toFixed(1) + " hrs flown ≈ " + Math.round(expected) + " gal expected at " + gph + " gal/hr, but only " + Math.round(b.gallons) + " gal invoiced — possible missing fuel bill" });
+          continue;
+        }
+        out.push({ ...b, expected: expected, level: "ok", message: b.tail + " " + b.month + ": " + b.flights + " flights, " + b.billed + " fuel bills, " + Math.round(b.gallons) + " gal invoiced vs ≈" + Math.round(expected) + " gal expected — looks complete" });
+        continue;
+      }
+      out.push({ ...b, level: "ok", message: b.tail + " " + b.month + ": " + b.flights + " flights, " + b.billed + " fuel bills, " + Math.round(b.gallons) + " gal invoiced" });
+    }
+    return out;
+  }
+
+  // ---------- per-family bills ----------
+
+  // Group a statement's lines into one itemized bill per family.
+  function familyBills(statement) {
+    const by = {};
+    for (const l of statement.lines) {
+      if (!by[l.family]) by[l.family] = [];
+      by[l.family].push(l);
+    }
+    return Object.keys(by).sort().map((name) => {
+      const lines = by[name];
+      return {
+        family: name,
+        lines: lines,
+        total: lines.reduce((s, l) => s + l.total, 0),
+        gallons: lines.reduce((s, l) => s + l.gallons, 0),
+      };
+    });
+  }
+
+  // Plain-text rendering for an email or text message body.
+  function familyBillText(bill, period) {
+    const rows = bill.lines.map((l) =>
+      l.date + "  " + l.tail + "  " + (l.airport || "—") +
+      (l.gallons ? "  " + l.gallons + " gal" : "") +
+      "  $" + l.total.toFixed(2) +
+      (l.invoiceNumber ? "  (inv " + l.invoiceNumber + ")" : ""));
+    return "FUEL BILL — " + bill.family + "\n" +
+      "Period: " + (period || "all dates") + "\n" +
+      "―――――――――――――――――――――――\n" +
+      rows.join("\n") + "\n" +
+      "―――――――――――――――――――――――\n" +
+      "TOTAL DUE: $" + bill.total.toFixed(2) + "  (" + Math.round(bill.gallons) + " gal)\n";
+  }
+
+  function familyBillCSV(bill) {
+    const esc = (v) => {
+      v = String(v == null ? "" : v);
+      return /[",\n]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v;
+    };
+    const rows = [["Date", "Tail", "Airport", "Gallons", "Amount", "Invoice #"]];
+    for (const l of bill.lines) rows.push([l.date, l.tail, l.airport, l.gallons, l.total.toFixed(2), l.invoiceNumber]);
+    rows.push([]);
+    rows.push(["Total due", "", "", Math.round(bill.gallons), bill.total.toFixed(2), ""]);
+    return rows.map((r) => r.map(esc).join(",")).join("\n") + "\n";
+  }
+
   const FuelMatch = {
-    parseCSV, detectColumns, parseDateLoose, normTail, tailsEqual,
+    parseCSV, detectColumns, parseDateLoose, parseDuration, normTail, tailsEqual,
     normAirport, airportsEqual, dateDiffDays, extractInvoiceFields,
-    matchFuelToLegs, buildStatement, statementCSV,
+    matchFuelToLegs, buildStatement, statementCSV, monthlyChecks,
+    familyBills, familyBillText, familyBillCSV,
   };
 
   if (typeof module !== "undefined" && module.exports) module.exports = FuelMatch;
