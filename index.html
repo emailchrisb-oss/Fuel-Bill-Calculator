@@ -161,7 +161,6 @@
   .trip-strip select, .trip-strip input { width: 100%; font-size: 17px; padding: 12px; }
   .trip-strip button { flex: 1 1 100%; font-family: var(--display); font-size: 20px; letter-spacing: .12em; text-transform: uppercase; }
   @media (min-width: 641px) { .trip-strip button { flex: 0 0 auto; padding: 12px 26px; } }
-  #importBox > summary { cursor: pointer; }
   .bill { border: 1px solid var(--line); border-left: 4px solid var(--amber); border-radius: 10px; padding: 14px; margin-bottom: 14px; }
   .bill-head { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; flex-wrap: wrap; margin-bottom: 8px; }
   .bill-name { font-family: var(--display); font-weight: 700; font-size: 24px; letter-spacing: .05em; text-transform: uppercase; color: var(--navy); }
@@ -197,6 +196,62 @@
   #toast.show { opacity: 1; }
   .toolbar { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; margin-bottom: 8px; }
   @media (prefers-reduced-motion: reduce) { #toast { transition: none; } }
+
+  /* ---------- two-page nav: Attach | Statements ---------- */
+  .tabs { display: flex; gap: 10px; max-width: 1060px; margin: 18px auto 0; padding: 0 16px; }
+  .tab {
+    flex: 1 1 0; min-height: 54px;
+    font-family: var(--display); font-weight: 600; font-size: 21px;
+    letter-spacing: .08em; text-transform: uppercase; color: var(--muted);
+    background: var(--card); border: 1px solid var(--line); border-radius: 10px;
+  }
+  .tab.active {
+    background: var(--navy); border-color: var(--navy); color: #fff;
+    box-shadow: inset 0 -4px 0 var(--amber);
+  }
+  main { padding-top: 16px; }
+
+  /* Big attach tiles: the whole app in two taps */
+  .attach-grid { display: flex; flex-wrap: wrap; gap: 12px; }
+  .attach-tile {
+    flex: 1 1 240px; min-height: 132px; padding: 18px 14px;
+    display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px;
+    border: 2px dashed #b9c3cd; border-radius: 12px; background: #fafbfc;
+    font-family: var(--display); font-weight: 600; font-size: 24px;
+    letter-spacing: .05em; text-transform: uppercase; color: var(--navy);
+  }
+  .attach-tile:hover, .attach-tile.over { border-color: var(--amber); background: var(--amber-soft); }
+  .attach-tile .big { font-size: 34px; line-height: 1.1; }
+  .attach-tile .sub {
+    font-family: var(--body); font-weight: 400; font-size: 13px; line-height: 1.35;
+    letter-spacing: 0; text-transform: none; color: var(--muted); max-width: 34ch;
+  }
+  .status-line {
+    margin-top: 12px; padding: 10px 12px; border-radius: 8px; font-size: 15px;
+    background: var(--ok-soft); border-left: 3px solid var(--ok);
+  }
+  .status-line.attn { background: var(--warn-soft); border-left-color: var(--warn); }
+  details.card > summary {
+    cursor: pointer; font-family: var(--display); font-weight: 600; font-size: 19px;
+    letter-spacing: .03em; text-transform: uppercase; color: var(--navy);
+  }
+
+  /* Statements page: one openable card per month */
+  details.period {
+    border: 1px solid var(--line); border-left: 4px solid var(--navy);
+    border-radius: 10px; background: #fafbfc; margin-bottom: 10px;
+  }
+  details.period > summary {
+    cursor: pointer; display: flex; justify-content: space-between; align-items: baseline;
+    gap: 10px; padding: 13px 16px; list-style: none;
+    font-family: var(--display); font-weight: 600; font-size: 21px;
+    letter-spacing: .04em; text-transform: uppercase; color: var(--navy);
+  }
+  details.period > summary::-webkit-details-marker { display: none; }
+  details.period > summary .money { font-size: 16px; }
+  details.period[open] { background: var(--card); border-left-color: var(--amber); }
+  .period-body { padding: 0 14px 14px; }
+  #printSurface { display: none; }
 
   /* ---------- lock screen: gunmetal flight-deck gate ---------- */
   .lock {
@@ -306,13 +361,12 @@
     th { position: static; background: #fff; color: #444; }
     .totalrow td { background: #fff; }
     .checkline, .checkline.warn { background: #fff; }
-    /* Printing one family's bill: only that bill, nothing else. */
-    body.print-bill #statementCard { display: none !important; }
-    body.print-bill #billsCard { display: block !important; }
-    body.print-bill #billsCard > .row, body.print-bill #billsCard h2 { display: none !important; }
-    body.print-bill .bill { display: none; border: none; padding: 0; }
-    body.print-bill .bill.print-target { display: block; }
-    body.print-bill .bill-actions { display: none !important; }
+    /* Printing one family's bill: the bill is cloned into #printSurface and
+       everything else is hidden, so it prints from either page. */
+    body.print-bill main, body.print-bill .tabs { display: none !important; }
+    body.print-bill #printSurface { display: block !important; }
+    body.print-bill #printSurface .bill { border: none; padding: 0; }
+    body.print-bill #printSurface .bill-actions { display: none !important; }
   }
 </style>
 </head>
@@ -362,14 +416,65 @@
     <div class="greeting">Good Morning, Top Gun Kelley</div>
     <div class="wordmark"><span class="fuel">Fuel</span> Bill Splitter</div>
     <div class="tagline">World Fuel invoices, matched to the flight log and split by who was flying.
-      Runs entirely in this tab — nothing is uploaded anywhere.</div>
+      Records stay on this phone unless cloud sync is switched on in Settings.</div>
   </div>
 </header>
+<nav class="tabs no-print" id="tabsNav">
+  <button type="button" class="tab active" data-page="attach">🛩 Attach</button>
+  <button type="button" class="tab" data-page="statements">🧾 Statements</button>
+</nav>
 <main>
-  <div class="no-print">
+  <div id="pageAttach" class="no-print">
 
     <div class="card">
-      <h2><span class="step">1</span>Log the trip</h2>
+      <h2>Attach — the app does the rest</h2>
+      <div class="attach-grid">
+        <button type="button" id="attachFuel" class="attach-tile">
+          <span class="big">⛽</span>Attach fuel bill
+          <span class="sub">PDF invoice or a photo of the ticket — snap it right at the pump.
+            You can drop files on this button too.</span>
+        </button>
+        <button type="button" id="attachLog" class="attach-tile">
+          <span class="big">🛫</span>Attach flight log
+          <span class="sub">the Airplane Manager export (CSV) — this is how it knows
+            who was flying that day</span>
+        </button>
+      </div>
+      <input id="fuelFiles" type="file" accept=".pdf,application/pdf,image/*" multiple hidden>
+      <input id="legsFile" type="file" accept=".csv,.txt,text/csv" hidden>
+      <div id="autoStatus" class="status-line" hidden></div>
+      <div id="mappingArea" hidden>
+        <p class="hint" style="margin-bottom:4px">Check which columns hold each field:</p>
+        <div class="row" id="mappingRow"></div>
+        <button id="applyMapping" type="button" class="primary" style="margin-top:8px">Use these columns</button>
+      </div>
+      <div id="ownerMapArea" hidden>
+        <p class="hint" style="margin:10px 0 0">Who is each of these? (remembered for next time)</p>
+        <div class="chips" id="ownerChips"></div>
+      </div>
+      <details class="paste" id="invoicePasteBox">
+        <summary class="hint">…or paste invoice text</summary>
+        <textarea id="invoicePaste" placeholder="Paste the text of one invoice here"></textarea>
+        <button id="invoicePasteBtn" type="button">Extract from pasted text</button>
+      </details>
+      <details class="paste" id="legsPasteBox">
+        <summary class="hint">…or paste flight-log CSV text</summary>
+        <textarea id="legsPaste" placeholder="Date,Aircraft,From,To,Passenger&#10;06/03/2026,N45XX,KAUS,KASE,Smith"></textarea>
+        <button id="legsPasteBtn" type="button">Load pasted CSV</button>
+      </details>
+    </div>
+
+    <div class="card" id="reviewCard" hidden>
+      <h2>Needs a look</h2>
+      <p class="hint" style="margin:0 0 10px">These couldn't be assigned automatically — pick the
+        flight or the family and they drop off this list.</p>
+      <div class="tablewrap"><table id="reviewTable"></table></div>
+    </div>
+
+    <details class="card" id="manualBox">
+      <summary>✍️&nbsp; Manual entry — lost paperwork</summary>
+      <div style="margin-top:14px">
+      <label style="margin-bottom:6px">Log a trip by hand (no log needed)</label>
       <div class="trip-strip">
         <div>
           <label for="tripTail">✈️ Airplane</label>
@@ -385,71 +490,42 @@
         </div>
         <button id="logTrip" type="button" class="primary">＋ Log trip</button>
       </div>
-      <details id="importBox" style="margin-top:12px">
-        <summary class="hint">Import the Airplane Manager log instead (CSV)</summary>
-        <div class="row" style="margin-top:10px">
-          <div>
-            <label>CSV export (Excel exports: open and Save As → CSV)</label>
-            <input id="legsFile" type="file" accept=".csv,.txt,text/csv">
-          </div>
-        </div>
-        <details class="paste">
-          <summary class="hint">…or paste CSV text</summary>
-          <textarea id="legsPaste" placeholder="Date,Aircraft,From,To,Passenger&#10;06/03/2026,N45XX,KAUS,KASE,Smith"></textarea>
-          <button id="legsPasteBtn" type="button">Load pasted CSV</button>
-        </details>
-        <div id="mappingArea" hidden>
-          <p class="hint" style="margin-bottom:4px">Check which columns hold each field:</p>
-          <div class="row" id="mappingRow"></div>
-          <button id="applyMapping" type="button" class="primary" style="margin-top:8px">Use these columns</button>
-        </div>
-        <div id="ownerMapArea" hidden>
-          <p class="hint" style="margin:10px 0 0">Who is each of these? (remembered for next time)</p>
-          <div class="chips" id="ownerChips"></div>
-        </div>
-      </details>
+      <div style="margin-top:12px">
+        <button id="addLeg" type="button">+ Add flight with route &amp; hours</button>
+        <span class="hint">the detailed version, for the missing-bill check</span>
+      </div>
+      <div style="margin-top:8px">
+        <button id="addManual" type="button">+ Add fuel bill by hand</button>
+        <span class="hint">lost or missing invoice — type in the numbers yourself</span>
+      </div>
+      </div>
+    </details>
+
+    <details class="card" id="dataBox" hidden>
+      <summary>📋&nbsp; Everything loaded — flights &amp; fuel lines</summary>
       <div id="legsArea" hidden style="margin-top:12px">
         <div class="hint" id="legsCount"></div>
         <div class="tablewrap"><table id="legsTable"></table></div>
       </div>
-      <div style="margin-top:10px">
-        <button id="addLeg" type="button">+ Add flight with route &amp; hours</button>
-        <span class="hint">the detailed version, for the missing-bill check</span>
-      </div>
-    </div>
-
-    <div class="card">
-      <h2><span class="step">2</span>Fuel bills (World Fuel invoices)</h2>
-      <div class="row" style="margin-bottom:10px">
-        <button id="snapBtn" type="button" class="primary">📷 Snap the fuel ticket</button>
-        <input id="photoInput" type="file" accept="image/*" capture="environment" hidden>
-        <span class="hint">right at the pump — take a photo of the receipt and the numbers fill in themselves
-          (reading a photo needs an internet signal)</span>
-      </div>
-      <div class="drop" id="dropZone">
-        Drop PDF invoices here, or
-        <button id="pickPdfs" type="button">choose files</button>
-        <input id="pdfFiles" type="file" accept=".pdf,application/pdf" multiple hidden>
-        <div class="hint">Parsed fields show below for checking — nothing is billed straight off a PDF.</div>
-      </div>
-      <div style="margin-bottom:4px">
-        <button id="addManual" type="button">+ Add bill by hand</button>
-        <span class="hint">lost or missing invoice — type in the numbers yourself</span>
-      </div>
-      <details class="paste">
-        <summary class="hint">…or paste invoice text</summary>
-        <textarea id="invoicePaste" placeholder="Paste the text of one invoice here"></textarea>
-        <button id="invoicePasteBtn" type="button">Extract from pasted text</button>
-      </details>
       <div id="fuelArea" hidden style="margin-top:12px">
         <div class="hint" id="fuelCount"></div>
         <div class="tablewrap"><table id="fuelTable"></table></div>
       </div>
-    </div>
+    </details>
   </div>
 
+  <div id="pageStatements" hidden>
+
+    <div class="card no-print" id="periodsCard">
+      <h2>Statements by month</h2>
+      <p class="hint" style="margin:0 0 12px">Tap a month for each family's bill — email, text, print,
+        or export it. Set each family's email address in Settings and the email button is one click.</p>
+      <div id="periodsBody"></div>
+      <p class="hint" id="periodsEmpty">Nothing here yet — attach a fuel bill and a flight log on the Attach page.</p>
+    </div>
+
   <div class="card" id="statementCard" hidden>
-    <h2 class="no-print"><span class="step">3</span>Statement</h2>
+    <h2 class="no-print">Statement</h2>
     <div class="toolbar">
       <select id="monthSelect"></select>
       <button id="downloadCsv" type="button" class="primary">Download CSV</button>
@@ -459,7 +535,7 @@
   </div>
 
   <div class="card no-print" id="billsCard" hidden>
-    <h2><span class="step">4</span>Family bills</h2>
+    <h2>Custom period — family bills</h2>
     <div class="row" style="margin-bottom:12px">
       <div>
         <label for="billFrom">From month</label>
@@ -472,6 +548,7 @@
       <span class="hint" style="align-self:center">each family's itemized bill for the period — email, text, print, or export it</span>
     </div>
     <div id="billsBody"></div>
+  </div>
   </div>
 
   <details class="card no-print" id="settingsBox">
@@ -487,6 +564,20 @@
         <input id="familiesInput" style="width:100%" placeholder="Smith, Jones, Miller, Davis">
         <div class="hint">Fuel on a leg is billed to the family flying that leg — the group's
           uplift-goes-to-the-trip convention.</div>
+        <label style="margin-top:12px">Family email addresses (for one-click bill sending)</label>
+        <div id="familyEmailList"></div>
+      </div>
+      <div style="flex:1; min-width: 260px;">
+        <label>Cloud sync (optional)</label>
+        <div class="hint" style="margin-bottom:6px">Keeps the records safe off this phone and shared
+          with the squadron admin. Ask Chris for the two lines below — leave blank to stay
+          on-device only.</div>
+        <input id="syncRepo" style="width:100%" placeholder="private repo, e.g. emailchrisb-oss/fuel-data" autocomplete="off">
+        <input id="syncToken" type="password" style="width:100%; margin-top:6px" placeholder="access token" autocomplete="off">
+        <div class="row" style="gap:8px; margin-top:6px">
+          <button id="syncNow" type="button">Connect &amp; sync now</button>
+        </div>
+        <div class="hint" id="syncStatus" style="margin-top:6px"></div>
       </div>
       <div>
         <label>Access code (this phone)</label>
@@ -507,8 +598,10 @@
         <input id="backupFile" type="file" accept=".json" hidden>
       </div>
     </div>
+    <div class="hint" style="margin-top:12px">Build <span id="buildStamp"></span></div>
   </details>
 </main>
+<div id="printSurface"></div>
 <div id="toast"></div>
 
 <script src="match.js"></script>
@@ -630,6 +723,7 @@
 
 const FM = FuelMatch;
 const STORE_KEY = "fuelsplit-v1";
+const APP_BUILD = "2026-08-20a";
 
 let state = {
   billFrom: "", billTo: "",   // family-bill period, YYYY-MM or "" for open-ended
@@ -639,20 +733,24 @@ let state = {
     { tail: "N318SA", label: "Lear 45", gph: 190 },
   ],
   families: ["CJIG", "VIRTUS", "ETAP", "ZEMOG"],
+  familyEmails: {},      // family name -> email, for one-click bill sending
   ownerMap: {},          // lowercased owner string from the log -> family name
   legs: [],              // {date, tail, from, to, owner, familyOverride}
   fuel: [],              // {id, date, tail, airport, gallons, total, invoiceNumber,
                          //  source, matchIndex, matchStatus, familyOverride}
   pendingRows: null,     // parsed CSV waiting for column confirmation
   colMap: null,
+  updatedAt: 0,          // last local change, for cloud-sync last-write-wins
 };
 let nextId = 1;
 
 // ---------- persistence ----------
 
 function save() {
+  state.updatedAt = Date.now();
   const { pendingRows, ...rest } = state;
   try { localStorage.setItem(STORE_KEY, JSON.stringify(rest)); } catch (e) {}
+  schedulePush();
 }
 function load() {
   try {
@@ -660,6 +758,7 @@ function load() {
     if (!raw) return;
     const s = JSON.parse(raw);
     Object.assign(state, s, { pendingRows: null });
+    if (!state.familyEmails || typeof state.familyEmails !== "object") state.familyEmails = {};
     for (const f of state.fuel) nextId = Math.max(nextId, (f.id || 0) + 1);
     // Older saves predate the real fleet/family defaults — upgrade them.
     if (state.families.length && state.families[0] === "Family 1") {
@@ -690,6 +789,27 @@ const money = (v) => "$" + (v || 0).toLocaleString("en-US", { minimumFractionDig
 
 // ---------- settings ----------
 
+// Rebuilt on its own (not via renderSettings) so editing the families field
+// doesn't tear down the aircraft inputs mid-tap when its change event fires.
+function renderFamilyEmails() {
+  const emailList = $("familyEmailList");
+  emailList.innerHTML = "";
+  for (const fam of state.families) {
+    const row = document.createElement("div");
+    row.className = "row";
+    row.style.cssText = "gap:8px; margin-top:6px; align-items:center";
+    row.innerHTML = '<span style="min-width:72px; font-weight:600">' + esc(fam) + "</span>" +
+      '<input type="email" style="flex:1; min-width:180px" placeholder="their email" value="' +
+      esc(state.familyEmails[fam] || "") + '">';
+    row.querySelector("input").addEventListener("change", (e) => {
+      const v = e.target.value.trim();
+      if (v) state.familyEmails[fam] = v; else delete state.familyEmails[fam];
+      save(); renderStatement();
+    });
+    emailList.appendChild(row);
+  }
+}
+
 function renderSettings() {
   const list = $("aircraftList");
   list.innerHTML = "";
@@ -712,7 +832,13 @@ function renderSettings() {
     list.appendChild(div);
   });
   $("familiesInput").value = state.families.join(", ");
+  renderFamilyEmails();
   try { $("recoveryEmail").value = localStorage.getItem("fbs-recovery-email") || ""; } catch (e) {}
+  try {
+    $("syncRepo").value = localStorage.getItem("fbs-sync-repo") || "";
+    $("syncToken").value = localStorage.getItem("fbs-sync-token") || "";
+  } catch (e) {}
+  $("buildStamp").textContent = APP_BUILD;
 }
 $("addAircraft").addEventListener("click", () => {
   state.aircraft.push({ tail: "", label: "" }); save(); renderSettings();
@@ -744,7 +870,139 @@ $("recoveryEmail").addEventListener("change", (e) => {
 $("familiesInput").addEventListener("change", () => {
   state.families = $("familiesInput").value.split(",").map((s) => s.trim()).filter(Boolean);
   if (!state.families.length) state.families = ["CJIG", "VIRTUS", "ETAP", "ZEMOG"];
-  save(); renderTripEntry(); renderOwnerChips(); renderLegs(); renderFuel(); renderStatement();
+  save(); renderFamilyEmails(); renderTripEntry(); renderOwnerChips(); renderLegs(); renderFuel(); renderStatement();
+});
+
+// ---------- two pages: Attach | Statements ----------
+
+const tabBtns = document.querySelectorAll("#tabsNav .tab");
+function showPage(p) {
+  $("pageAttach").hidden = p !== "attach";
+  $("pageStatements").hidden = p !== "statements";
+  tabBtns.forEach((b) => b.classList.toggle("active", b.dataset.page === p));
+  window.scrollTo(0, 0);
+}
+tabBtns.forEach((b) => b.addEventListener("click", () => showPage(b.dataset.page)));
+
+// ---------- cloud sync: a private GitHub repo as the shared ledger ----------
+// Optional. With a repo + token from the squadron admin, every change lands in
+// data/state.json of that private repo, so the phone, the admin's browser, and
+// the monthly automation all read the same records. Newest copy wins — there is
+// effectively one writer at a time in this crew. Without a token the app stays
+// exactly as before: on-device only.
+
+const SYNC_PATH = "data/state.json";
+let syncTimer = null, syncBusy = false, syncQueued = false;
+
+function syncCfg() {
+  try {
+    const repo = (localStorage.getItem("fbs-sync-repo") || "").trim();
+    const token = (localStorage.getItem("fbs-sync-token") || "").trim();
+    if (/^[\w.-]+\/[\w.-]+$/.test(repo) && token) return { repo, token };
+  } catch (e) {}
+  return null;
+}
+function setSyncStatus(msg, bad) {
+  const el = $("syncStatus");
+  el.textContent = msg;
+  el.style.color = bad ? "var(--bad)" : "";
+}
+function ghFile(cfg, method, bodyObj) {
+  return fetch("https://api.github.com/repos/" + cfg.repo + "/contents/" + SYNC_PATH, {
+    method,
+    headers: { Authorization: "Bearer " + cfg.token, Accept: "application/vnd.github+json" },
+    body: bodyObj ? JSON.stringify(bodyObj) : undefined,
+  });
+}
+const b64enc = (s) => btoa(unescape(encodeURIComponent(s)));
+const b64dec = (s) => decodeURIComponent(escape(atob(s.replace(/\s/g, ""))));
+
+function adoptRemote(remote) {
+  Object.assign(state, remote, { pendingRows: null });
+  if (!state.familyEmails || typeof state.familyEmails !== "object") state.familyEmails = {};
+  for (const f of state.fuel) nextId = Math.max(nextId, (f.id || 0) + 1);
+  // Persist directly — save() would stamp a new updatedAt and echo it back up.
+  const { pendingRows, ...rest } = state;
+  try { localStorage.setItem(STORE_KEY, JSON.stringify(rest)); } catch (e) {}
+  renderAll();
+}
+
+async function syncPull(quiet) {
+  const cfg = syncCfg(); if (!cfg) return false;
+  try {
+    const res = await ghFile(cfg, "GET");
+    if (res.status === 404) { setSyncStatus("Connected — nothing in the cloud yet."); return false; }
+    if (!res.ok) throw new Error("HTTP " + res.status);
+    const j = await res.json();
+    const remote = JSON.parse(b64dec(j.content));
+    if ((remote.updatedAt || 0) > (state.updatedAt || 0)) {
+      adoptRemote(remote);
+      setSyncStatus("Pulled the latest records from the cloud ✓");
+      return true;
+    }
+    setSyncStatus("In sync ✓");
+    return false;
+  } catch (e) {
+    if (!quiet) setSyncStatus("Couldn't reach the cloud repo — check the repo name and token.", true);
+    return false;
+  }
+}
+
+async function syncPush() {
+  const cfg = syncCfg(); if (!cfg) return;
+  if (syncBusy) { syncQueued = true; return; }
+  syncBusy = true;
+  try {
+    const res = await ghFile(cfg, "GET");
+    let sha = null;
+    if (res.ok) {
+      const j = await res.json();
+      sha = j.sha;
+      try {
+        const remote = JSON.parse(b64dec(j.content));
+        if ((remote.updatedAt || 0) > (state.updatedAt || 0)) {
+          adoptRemote(remote);
+          setSyncStatus("Pulled newer records from the cloud instead ✓");
+          return;
+        }
+      } catch (e) {}
+    } else if (res.status !== 404) throw new Error("HTTP " + res.status);
+    const { pendingRows, ...rest } = state;
+    const put = await ghFile(cfg, "PUT", {
+      message: "App sync",
+      content: b64enc(JSON.stringify(rest)),
+      ...(sha ? { sha } : {}),
+    });
+    if (!put.ok) throw new Error("HTTP " + put.status);
+    setSyncStatus("Saved to the cloud ✓ " + new Date().toLocaleTimeString());
+  } catch (e) {
+    setSyncStatus("Cloud save failed (" + e.message + ") — the records are still safe on this phone.", true);
+  } finally {
+    syncBusy = false;
+    if (syncQueued) { syncQueued = false; schedulePush(); }
+  }
+}
+function schedulePush() {
+  if (!syncCfg()) return;
+  clearTimeout(syncTimer);
+  syncTimer = setTimeout(syncPush, 2500);
+}
+
+for (const [id, key] of [["syncRepo", "fbs-sync-repo"], ["syncToken", "fbs-sync-token"]]) {
+  $(id).addEventListener("change", (e) => {
+    const v = e.target.value.trim();
+    try { if (v) localStorage.setItem(key, v); else localStorage.removeItem(key); } catch (err) {}
+  });
+}
+$("syncNow").addEventListener("click", async () => {
+  for (const [id, key] of [["syncRepo", "fbs-sync-repo"], ["syncToken", "fbs-sync-token"]]) {
+    const v = $(id).value.trim();
+    try { if (v) localStorage.setItem(key, v); else localStorage.removeItem(key); } catch (err) {}
+  }
+  if (!syncCfg()) { setSyncStatus("Enter the repo and token first — ask Chris for them.", true); return; }
+  setSyncStatus("Contacting the tower…");
+  const adopted = await syncPull();
+  if (!adopted) await syncPush();
 });
 
 // ---------- flight log ----------
@@ -768,6 +1026,9 @@ function loadLegsCSV(text) {
   if (rows.length < 2) { toast("That file has no data rows."); return; }
   state.pendingRows = rows;
   const guess = FM.detectColumns(rows[0]);
+  // When the header is unambiguous, just do it — the mapping quiz only
+  // appears for exports the detector can't read.
+  if (guess.date >= 0 && guess.tail >= 0) { applyColumnMap(guess); return; }
   renderMapping(rows[0], guess);
 }
 
@@ -789,6 +1050,9 @@ function renderMapping(header, guess) {
 $("applyMapping").addEventListener("click", () => {
   const map = {};
   $("mappingRow").querySelectorAll("select").forEach((s) => { map[s.dataset.k] = +s.value; });
+  applyColumnMap(map);
+});
+function applyColumnMap(map) {
   if (map.date < 0 || map.tail < 0) { toast("Date and Tail columns are required."); return; }
   const rows = state.pendingRows;
   const legs = [];
@@ -819,7 +1083,7 @@ $("applyMapping").addEventListener("click", () => {
   toast("Loaded " + legs.length + " legs" + (skipped ? " (" + skipped + " rows skipped: no date/tail)" : ""));
   rematchAll();
   renderOwnerChips(); renderLegs(); renderFuel(); renderStatement();
-});
+}
 
 $("legsFile").addEventListener("change", async (e) => {
   const file = e.target.files[0];
@@ -967,15 +1231,31 @@ async function handlePdfFiles(files) {
   else if (added) toast(added + " invoice" + (added > 1 ? "s" : "") + " parsed — check the fields below.");
 }
 
-const dz = $("dropZone");
-dz.addEventListener("dragover", (e) => { e.preventDefault(); dz.classList.add("over"); });
-dz.addEventListener("dragleave", () => dz.classList.remove("over"));
-dz.addEventListener("drop", (e) => {
-  e.preventDefault(); dz.classList.remove("over");
-  handlePdfFiles([...e.dataTransfer.files].filter((f) => /pdf$/i.test(f.name) || f.type === "application/pdf"));
-});
-$("pickPdfs").addEventListener("click", () => $("pdfFiles").click());
-$("pdfFiles").addEventListener("change", (e) => { handlePdfFiles([...e.target.files]); e.target.value = ""; });
+// One button takes everything: PDFs go to the PDF reader, photos go to OCR.
+// On the phone the same tap offers "Take Photo" — that's the snap-at-the-pump path.
+async function handleFuelFiles(files) {
+  const pdfs = files.filter((f) => /pdf$/i.test(f.name) || f.type === "application/pdf");
+  const images = files.filter((f) => !pdfs.includes(f) &&
+    (f.type.startsWith("image/") || /\.(jpe?g|png|heic|heif|webp|gif)$/i.test(f.name)));
+  if (!pdfs.length && !images.length) { toast("That file isn't a PDF or a photo."); return; }
+  if (pdfs.length) await handlePdfFiles(pdfs);
+  for (const img of images) await handlePhoto(img);
+}
+$("attachFuel").addEventListener("click", () => $("fuelFiles").click());
+$("fuelFiles").addEventListener("change", (e) => { handleFuelFiles([...e.target.files]); e.target.value = ""; });
+$("attachLog").addEventListener("click", () => $("legsFile").click());
+for (const [tileId, onDrop] of [
+  ["attachFuel", (files) => handleFuelFiles(files)],
+  ["attachLog", async (files) => { const f = files[0]; if (f) loadLegsCSV(await f.text()); }],
+]) {
+  const tile = $(tileId);
+  tile.addEventListener("dragover", (e) => { e.preventDefault(); tile.classList.add("over"); });
+  tile.addEventListener("dragleave", () => tile.classList.remove("over"));
+  tile.addEventListener("drop", (e) => {
+    e.preventDefault(); tile.classList.remove("over");
+    onDrop([...e.dataTransfer.files]);
+  });
+}
 $("invoicePasteBtn").addEventListener("click", () => {
   const text = $("invoicePaste").value.trim();
   if (!text) return;
@@ -1036,12 +1316,6 @@ async function handlePhoto(file) {
     toast("Couldn't read that photo (it needs an internet signal, and a straight-on shot helps). Added a blank line — type the numbers in.");
   }
 }
-$("snapBtn").addEventListener("click", () => $("photoInput").click());
-$("photoInput").addEventListener("change", (e) => {
-  const file = e.target.files[0];
-  if (file) handlePhoto(file);
-  e.target.value = "";
-});
 
 function entryFamily(e) {
   if (e.familyOverride) return e.familyOverride;
@@ -1054,17 +1328,52 @@ function legLabel(leg) {
     (leg.owner ? " (" + leg.owner + ")" : "");
 }
 
+// A line "needs a look" when the money has nowhere to land yet, or the
+// matcher guessed but wasn't sure and nobody has confirmed. An explicit
+// family choice settles a line no matter how it got here.
+function needsLook(f) {
+  return (f.matchStatus === "review" && !f.familyOverride) || !entryFamily(f);
+}
+
+const FUEL_HEADER = "<tr><th>Status</th><th>Date</th><th>Tail</th><th>Airport</th><th>Gallons</th>" +
+  "<th>Total $</th><th>Invoice #</th><th>Matched leg</th><th>Family</th><th>Source</th><th></th></tr>";
+
+function renderStatus() {
+  const el = $("autoStatus");
+  const nF = state.fuel.length, nL = state.legs.length;
+  if (!nF && !nL) { el.hidden = true; return; }
+  el.hidden = false;
+  const review = state.fuel.filter(needsLook).length;
+  let txt = "✈ " + nL + " flight" + (nL === 1 ? "" : "s") + " · ⛽ " + nF + " fuel bill" + (nF === 1 ? "" : "s");
+  if (nF) {
+    txt += review
+      ? " · " + (nF - review) + " assigned · ⚠ " + review + " need" + (review === 1 ? "s" : "") + " a look below"
+      : " · all assigned automatically ✓";
+  }
+  el.textContent = txt;
+  el.classList.toggle("attn", review > 0);
+}
+
 function renderFuel() {
+  renderStatus();
+  $("dataBox").hidden = !state.fuel.length && !state.legs.length;
+  const review = state.fuel.filter(needsLook);
+  $("reviewCard").hidden = !review.length;
+  if (review.length) {
+    const rt = $("reviewTable");
+    rt.innerHTML = FUEL_HEADER;
+    for (const f of review) rt.appendChild(fuelRowTR(f));
+  }
   $("fuelArea").hidden = !state.fuel.length;
-  $("statementCard").hidden = !state.fuel.length && !state.legs.length;
   if (!state.fuel.length) return;
-  const review = state.fuel.filter((f) => f.matchStatus === "review" || f.matchStatus === "unmatched").length;
   $("fuelCount").textContent = state.fuel.length + " fuel line" + (state.fuel.length > 1 ? "s" : "") +
-    (review ? " — " + review + " need" + (review === 1 ? "s" : "") + " a look" : " — all matched");
+    (review.length ? " — " + review.length + " need" + (review.length === 1 ? "s" : "") + " a look" : " — all matched");
   const t = $("fuelTable");
-  t.innerHTML = "<tr><th>Status</th><th>Date</th><th>Tail</th><th>Airport</th><th>Gallons</th>" +
-    "<th>Total $</th><th>Invoice #</th><th>Matched leg</th><th>Family</th><th>Source</th><th></th></tr>";
-  state.fuel.forEach((f) => {
+  t.innerHTML = FUEL_HEADER;
+  state.fuel.forEach((f) => t.appendChild(fuelRowTR(f)));
+}
+
+function fuelRowTR(f) {
     const tr = document.createElement("tr");
     const fam = entryFamily(f);
     tr.innerHTML =
@@ -1104,8 +1413,7 @@ function renderFuel() {
       state.fuel = state.fuel.filter((x) => x !== f);
       save(); renderFuel(); renderStatement();
     });
-    t.appendChild(tr);
-  });
+    return tr;
 }
 
 // The planes are a fixed fleet, so tails are picked, not typed. Labels show
@@ -1208,6 +1516,7 @@ function renderStatement() {
         (m.estimated ? " (" + m.estimated + " estimated from hours)" : "") +
         (m.skipped ? " · " + m.skipped + " leg" + (m.skipped === 1 ? "" : "s") + " not counted (no route or hours)" : "") + "</div>";
     }
+    html += '<div class="hint no-print">Great-circle distance between the airports flown; “estimated” legs use hours × a typical cruise speed. A fun number, not a logbook number.</div>';
     html += "</div>";
   }
 
@@ -1249,6 +1558,44 @@ function billPeriodLabel() {
   return f ? "from " + f : "through " + t;
 }
 
+// One family's bill as a DOM card — used by the month statements and the
+// custom-period section alike. With an email on file the send is one click.
+function billDiv(bill, period) {
+  const div = document.createElement("div");
+  div.className = "bill";
+  let html = '<div class="bill-head"><div class="bill-name">' + esc(bill.family) + "</div>" +
+    '<div class="bill-meta">' + esc(period) + " · " + bill.lines.length + " uplift" + (bill.lines.length > 1 ? "s" : "") + "</div></div>";
+  html += '<div class="tablewrap" style="max-height:none"><table><tr><th>Date</th><th>Tail</th><th>Airport</th>' +
+    '<th class="money">Gal</th><th class="money">Amount</th><th>Invoice #</th></tr>';
+  for (const l of bill.lines) {
+    html += "<tr><td>" + esc(l.date) + "</td><td>" + esc(l.tail) + "</td><td>" + esc(l.airport) +
+      '</td><td class="money">' + (l.gallons || "") + '</td><td class="money">' + money(l.total) +
+      "</td><td>" + esc(l.invoiceNumber) + "</td></tr>";
+  }
+  html += '<tr class="totalrow"><td colspan="3">Total due — ' + esc(bill.family) + '</td><td class="money">' +
+    Math.round(bill.gallons) + '</td><td class="money">' + money(bill.total) + "</td><td></td></tr></table></div>";
+  const text = FM.familyBillText(bill, period);
+  const subject = "Fuel bill — " + bill.family + " — " + period;
+  const to = state.familyEmails[bill.family] || "";
+  html += '<div class="bill-actions no-print">' +
+    '<a href="mailto:' + esc(to) + "?subject=" + encodeURIComponent(subject) + "&body=" + encodeURIComponent(text) + '"' +
+    (to ? ' title="Sends to ' + esc(to) + '"' : ' title="Set this family\'s email in Settings and this becomes one click"') +
+    ">📧 Email" + (to ? "" : "…") + "</a>" +
+    '<a href="sms:?&body=' + encodeURIComponent(subject + "\n\n" + text) + '">💬 Text</a>' +
+    '<button type="button" class="bill-print">🖨 Print</button>' +
+    '<button type="button" class="bill-csv">⬇ CSV</button></div>';
+  div.innerHTML = html;
+  div.querySelector(".bill-print").addEventListener("click", () => printBill(div));
+  div.querySelector(".bill-csv").addEventListener("click", () => {
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(new Blob([FM.familyBillCSV(bill)], { type: "text/csv" }));
+    a.download = "fuel-bill-" + bill.family.replace(/[^A-Za-z0-9-]+/g, "_") + "-" + period.replace(/[^A-Za-z0-9-]+/g, "_") + ".csv";
+    a.click();
+    URL.revokeObjectURL(a.href);
+  });
+  return div;
+}
+
 function renderBills(months) {
   const asc = [...months].sort();
   for (const [id, key] of [["billFrom", "billFrom"], ["billTo", "billTo"]]) {
@@ -1269,49 +1616,52 @@ function renderBills(months) {
   const body = $("billsBody");
   body.innerHTML = "";
   const period = billPeriodLabel();
-  for (const bill of bills) {
-    const div = document.createElement("div");
-    div.className = "bill";
-    let html = '<div class="bill-head"><div class="bill-name">' + esc(bill.family) + "</div>" +
-      '<div class="bill-meta">' + esc(period) + " · " + bill.lines.length + " uplift" + (bill.lines.length > 1 ? "s" : "") + "</div></div>";
-    html += '<div class="tablewrap" style="max-height:none"><table><tr><th>Date</th><th>Tail</th><th>Airport</th>' +
-      '<th class="money">Gal</th><th class="money">Amount</th><th>Invoice #</th></tr>';
-    for (const l of bill.lines) {
-      html += "<tr><td>" + esc(l.date) + "</td><td>" + esc(l.tail) + "</td><td>" + esc(l.airport) +
-        '</td><td class="money">' + (l.gallons || "") + '</td><td class="money">' + money(l.total) +
-        "</td><td>" + esc(l.invoiceNumber) + "</td></tr>";
-    }
-    html += '<tr class="totalrow"><td colspan="3">Total due — ' + esc(bill.family) + '</td><td class="money">' +
-      Math.round(bill.gallons) + '</td><td class="money">' + money(bill.total) + "</td><td></td></tr></table></div>";
-    const text = FM.familyBillText(bill, period);
-    const subject = "Fuel bill — " + bill.family + " — " + period;
-    html += '<div class="bill-actions no-print">' +
-      '<a href="mailto:?subject=' + encodeURIComponent(subject) + "&body=" + encodeURIComponent(text) + '">📧 Email</a>' +
-      '<a href="sms:?&body=' + encodeURIComponent(subject + "\n\n" + text) + '">💬 Text</a>' +
-      '<button type="button" class="bill-print">🖨 Print</button>' +
-      '<button type="button" class="bill-csv">⬇ CSV</button></div>';
-    div.innerHTML = html;
-    div.querySelector(".bill-print").addEventListener("click", () => printBill(div));
-    div.querySelector(".bill-csv").addEventListener("click", () => {
-      const a = document.createElement("a");
-      a.href = URL.createObjectURL(new Blob([FM.familyBillCSV(bill)], { type: "text/csv" }));
-      a.download = "fuel-bill-" + bill.family.replace(/[^A-Za-z0-9-]+/g, "_") + "-" + period.replace(/[^A-Za-z0-9-]+/g, "_") + ".csv";
-      a.click();
-      URL.revokeObjectURL(a.href);
-    });
-    body.appendChild(div);
-  }
+  for (const bill of bills) body.appendChild(billDiv(bill, period));
+  renderPeriods(months, full);
+}
+
+// ---------- statements by month: the page Kelley actually opens ----------
+
+const MONTH_NAMES = ["January", "February", "March", "April", "May", "June",
+  "July", "August", "September", "October", "November", "December"];
+function monthLabel(m) {
+  const p = m.split("-");
+  return (MONTH_NAMES[+p[1] - 1] || p[1]) + " " + p[0];
+}
+
+function renderPeriods(months, full) {
+  const body = $("periodsBody");
+  body.innerHTML = "";
+  const desc = [...months].sort().reverse().slice(0, 12);
+  $("periodsEmpty").hidden = !!desc.length;
+  desc.forEach((m, idx) => {
+    const lines = full.lines.filter((l) => (l.date || "").slice(0, 7) === m);
+    const bills = FM.familyBills({ lines }).filter((b) => b.family !== "Unassigned");
+    const monthTotal = lines.reduce((s, l) => s + (l.total || 0), 0);
+    const det = document.createElement("details");
+    det.className = "period";
+    if (idx === 0) det.open = true;
+    const label = monthLabel(m);
+    det.innerHTML = "<summary><span>" + esc(label) + '</span><span class="money">' + money(monthTotal) +
+      '</span></summary><div class="period-body"></div>';
+    const bd = det.querySelector(".period-body");
+    if (!bills.length) bd.innerHTML = '<p class="hint">No fuel billed to a family this month.</p>';
+    for (const bill of bills) bd.appendChild(billDiv(bill, label));
+    body.appendChild(det);
+  });
 }
 function statementDataAll() {
   const legsWithFamily = state.legs.map((leg) => ({ ...leg, family: legFamily(leg) || "Unassigned" }));
   return FM.buildStatement(state.fuel, legsWithFamily, null);
 }
 function printBill(div) {
+  const surface = $("printSurface");
+  surface.innerHTML = "";
+  surface.appendChild(div.cloneNode(true));
   document.body.classList.add("print-bill");
-  div.classList.add("print-target");
   const done = () => {
     document.body.classList.remove("print-bill");
-    div.classList.remove("print-target");
+    surface.innerHTML = "";
     window.removeEventListener("afterprint", done);
   };
   window.addEventListener("afterprint", done);
@@ -1368,6 +1718,9 @@ function renderAll() {
 }
 load();
 renderAll();
+// Cloud-first on open: if the shared ledger has newer records (another device,
+// or the monthly automation), adopt them. Quiet — offline is a normal state.
+syncPull(true);
 </script>
 </body>
 </html>
