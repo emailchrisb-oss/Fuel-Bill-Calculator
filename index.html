@@ -442,6 +442,11 @@
       </div>
       <input id="fuelFiles" type="file" accept=".pdf,application/pdf,image/*,.csv,.xlsx,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" multiple hidden>
       <input id="legsFile" type="file" accept=".csv,.txt,text/csv" hidden>
+      <div style="margin-top:12px">
+        <button id="fetchMail" type="button" class="primary" style="width:100%">📨 Push to retrieve from email</button>
+        <div class="hint" style="margin-top:4px">The tower reads the fuel email every hour and parks new records
+          in the cloud — this button pulls in whatever has landed. Needs cloud sync switched on in Settings.</div>
+      </div>
       <div id="autoStatus" class="status-line" hidden></div>
       <div id="mappingArea" hidden>
         <p class="hint" style="margin-bottom:4px">Check which columns hold each field:</p>
@@ -723,7 +728,7 @@
 
 const FM = FuelMatch;
 const STORE_KEY = "fuelsplit-v1";
-const APP_BUILD = "2026-08-23a";
+const APP_BUILD = "2026-08-23b";
 
 let state = {
   billFrom: "", billTo: "",   // family-bill period, YYYY-MM or "" for open-ended
@@ -994,6 +999,19 @@ for (const [id, key] of [["syncRepo", "fbs-sync-repo"], ["syncToken", "fbs-sync-
     try { if (v) localStorage.setItem(key, v); else localStorage.removeItem(key); } catch (err) {}
   });
 }
+// "Retrieve from email": the page itself can't read a mailbox — the hourly
+// tower automation does that and parks parsed records in the cloud ledger.
+// This button pulls in whatever has landed since the app last looked.
+$("fetchMail").addEventListener("click", async () => {
+  if (!syncCfg()) {
+    toast("Needs cloud sync first — open Settings at the bottom and enter the repo and token (ask Chris).");
+    return;
+  }
+  toast("Radioing the tower…");
+  const got = await syncPull();
+  toast(got ? "New records pulled in ✓" : "Up to date — the tower checks the email every hour, so anything new lands here on its own.");
+});
+
 $("syncNow").addEventListener("click", async () => {
   for (const [id, key] of [["syncRepo", "fbs-sync-repo"], ["syncToken", "fbs-sync-token"]]) {
     const v = $(id).value.trim();
