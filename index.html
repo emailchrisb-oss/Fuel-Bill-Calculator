@@ -431,8 +431,8 @@
       <div class="attach-grid">
         <button type="button" id="attachFuel" class="attach-tile">
           <span class="big">⛽</span>Attach fuel bill
-          <span class="sub">PDF invoice or a photo of the ticket — snap it right at the pump.
-            You can drop files on this button too.</span>
+          <span class="sub">the World Fuel report (CSV or Excel), a PDF invoice, or a photo of
+            the ticket snapped right at the pump. Drop files here too.</span>
         </button>
         <button type="button" id="attachLog" class="attach-tile">
           <span class="big">🛫</span>Attach flight log
@@ -440,7 +440,7 @@
             who was flying that day</span>
         </button>
       </div>
-      <input id="fuelFiles" type="file" accept=".pdf,application/pdf,image/*" multiple hidden>
+      <input id="fuelFiles" type="file" accept=".pdf,application/pdf,image/*,.csv,.xlsx,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" multiple hidden>
       <input id="legsFile" type="file" accept=".csv,.txt,text/csv" hidden>
       <div id="autoStatus" class="status-line" hidden></div>
       <div id="mappingArea" hidden>
@@ -723,7 +723,7 @@
 
 const FM = FuelMatch;
 const STORE_KEY = "fuelsplit-v1";
-const APP_BUILD = "2026-08-20a";
+const APP_BUILD = "2026-08-23a";
 
 let state = {
   billFrom: "", billTo: "",   // family-bill period, YYYY-MM or "" for open-ended
@@ -1024,12 +1024,30 @@ function knownAirports() {
 function loadLegsCSV(text) {
   const rows = FM.parseCSV(text);
   if (rows.length < 2) { toast("That file has no data rows."); return; }
+  // A World Fuel report dropped on the flight-log button still counts.
+  if (FM.sniffRows(rows) === "wfs") {
+    toast("That's a fuel report — loading it as invoices.");
+    handleTableRows(rows, "fuel report");
+    return;
+  }
   state.pendingRows = rows;
   const guess = FM.detectColumns(rows[0]);
   // When the header is unambiguous, just do it — the mapping quiz only
   // appears for exports the detector can't read.
   if (guess.date >= 0 && guess.tail >= 0) { applyColumnMap(guess); return; }
   renderMapping(rows[0], guess);
+}
+
+// Owner strings that clearly identify a family — or the dry-lease and
+// shared-split buckets — map themselves; only genuinely ambiguous names
+// wait for a human on the chips.
+function autoMapOwners() {
+  for (const owner of new Set(state.legs.map((l) => l.owner).filter(Boolean))) {
+    const key = owner.toLowerCase();
+    if (state.ownerMap[key]) continue;
+    const guess = FM.autoOwnerMap(owner, state.families);
+    if (guess) state.ownerMap[key] = guess;
+  }
 }
 
 function renderMapping(header, guess) {
@@ -1081,6 +1099,7 @@ function applyColumnMap(map) {
   $("mappingArea").hidden = true;
   save();
   toast("Loaded " + legs.length + " legs" + (skipped ? " (" + skipped + " rows skipped: no date/tail)" : ""));
+  autoMapOwners();
   rematchAll();
   renderOwnerChips(); renderLegs(); renderFuel(); renderStatement();
 }
@@ -1098,6 +1117,12 @@ function legFamily(leg) {
   return leg.familyOverride || state.ownerMap[leg.owner.toLowerCase()] || "";
 }
 
+// Everywhere a family gets picked, the two special buckets ride along:
+// dry-lease flying is its own category, shared expenses split equally.
+function billingChoices() {
+  return state.families.concat([FM.SPLIT_FAMILY, FM.DRY_LEASE]);
+}
+
 function renderOwnerChips() {
   const owners = [...new Set(state.legs.map((l) => l.owner).filter(Boolean))];
   $("ownerMapArea").hidden = !owners.length;
@@ -1109,7 +1134,7 @@ function renderOwnerChips() {
     const current = state.ownerMap[owner.toLowerCase()] || "";
     chip.innerHTML = "<b>" + esc(owner) + "</b><select>" +
       '<option value="">?</option>' +
-      state.families.map((f) => '<option' + (f === current ? " selected" : "") + ">" + esc(f) + "</option>").join("") +
+      billingChoices().map((f) => '<option' + (f === current ? " selected" : "") + ">" + esc(f) + "</option>").join("") +
       "</select>";
     chip.querySelector("select").addEventListener("change", (e) => {
       if (e.target.value) state.ownerMap[owner.toLowerCase()] = e.target.value;
@@ -1123,7 +1148,7 @@ function renderOwnerChips() {
 function familySelectHTML(leg) {
   return "<select>" +
     '<option value="">' + (state.ownerMap[leg.owner.toLowerCase()] ? esc(state.ownerMap[leg.owner.toLowerCase()]) + " (auto)" : "—") + "</option>" +
-    state.families.map((f) => '<option value="' + esc(f) + '"' + (leg.familyOverride === f ? " selected" : "") + ">" + esc(f) + "</option>").join("") +
+    billingChoices().map((f) => '<option value="' + esc(f) + '"' + (leg.familyOverride === f ? " selected" : "") + ">" + esc(f) + "</option>").join("") +
     "</select>";
 }
 
@@ -1231,15 +1256,152 @@ async function handlePdfFiles(files) {
   else if (added) toast(added + " invoice" + (added > 1 ? "s" : "") + " parsed — check the fields below.");
 }
 
-// One button takes everything: PDFs go to the PDF reader, photos go to OCR.
-// On the phone the same tap offers "Take Photo" — that's the snap-at-the-pump path.
+// One button takes everything: World Fuel report spreadsheets (CSV or
+// XLSX), PDFs, and photos. Tables are sniffed, so a flight log dropped on
+// the fuel button still lands in the right place — and vice versa.
 async function handleFuelFiles(files) {
-  const pdfs = files.filter((f) => /pdf$/i.test(f.name) || f.type === "application/pdf");
-  const images = files.filter((f) => !pdfs.includes(f) &&
-    (f.type.startsWith("image/") || /\.(jpe?g|png|heic|heif|webp|gif)$/i.test(f.name)));
-  if (!pdfs.length && !images.length) { toast("That file isn't a PDF or a photo."); return; }
+  const pdfs = [], images = [], csvs = [], sheets = [];
+  for (const f of files) {
+    if (/\.pdf$/i.test(f.name) || f.type === "application/pdf") pdfs.push(f);
+    else if (/\.xlsx?$/i.test(f.name) || /spreadsheetml/.test(f.type)) sheets.push(f);
+    else if (/\.(csv|txt)$/i.test(f.name) || /csv/.test(f.type)) csvs.push(f);
+    else if (f.type.startsWith("image/") || /\.(jpe?g|png|heic|heif|webp|gif)$/i.test(f.name)) images.push(f);
+  }
+  if (!pdfs.length && !images.length && !csvs.length && !sheets.length) {
+    toast("That file isn't a spreadsheet, PDF, or photo."); return;
+  }
   if (pdfs.length) await handlePdfFiles(pdfs);
+  for (const f of csvs) handleTableRows(FM.parseCSV(await f.text()), f.name);
+  for (const f of sheets) {
+    try { handleTableRows(await xlsxRows(await f.arrayBuffer()), f.name); }
+    catch (e) { toast(f.name + ": couldn't read that Excel file — export it as CSV and attach that instead."); }
+  }
   for (const img of images) await handlePhoto(img);
+}
+
+function handleTableRows(rows, name) {
+  const kind = FM.sniffRows(rows);
+  if (kind === "wfs") {
+    const parsed = FM.parseWfsRows(rows);
+    if (!parsed.entries.length) { toast(name + ": found the invoice header but no readable rows."); return; }
+    addWfsEntries(parsed.entries, name);
+    if (parsed.skipped) toast(parsed.skipped + " row(s) in " + name + " were skipped (missing invoice/date/amount).");
+  } else if (kind === "legs") {
+    toast(name + " looks like the flight log — loading it as flights.");
+    state.pendingRows = rows;
+    const guess = FM.detectColumns(rows[0]);
+    if (guess.date >= 0 && guess.tail >= 0) applyColumnMap(guess);
+    else renderMapping(rows[0], guess);
+  } else {
+    toast(name + ": couldn't recognize that table — expected a World Fuel report or a flight log.");
+  }
+}
+
+// New invoices merge by invoice number, so re-attaching a monthly report
+// (or attaching both WFS formats) never double-bills — and the Reporting
+// format's gallons enrich lines the Manager format loaded without them.
+function addWfsEntries(entries, source) {
+  let added = 0, dupes = 0, enriched = 0;
+  const byInv = {};
+  for (const f of state.fuel) if (f.invoiceNumber) byInv[f.invoiceNumber] = f;
+  for (const e of entries) {
+    const existing = byInv[e.invoiceNumber];
+    if (existing) {
+      dupes++;
+      if (existing.gallons == null && e.gallons != null) {
+        existing.gallons = Math.round(e.gallons * 10) / 10;
+        enriched++;
+      }
+      continue;
+    }
+    const entry = {
+      id: nextId++, date: e.date, tail: e.tail, airport: e.airport,
+      gallons: e.gallons == null ? null : Math.round(e.gallons * 10) / 10,
+      total: e.total, invoiceNumber: e.invoiceNumber,
+      source: source || "WFS report", matchIndex: -1, matchStatus: "", familyOverride: "",
+    };
+    rematch(entry);
+    state.fuel.push(entry);
+    byInv[e.invoiceNumber] = entry;
+    added++;
+  }
+  save(); renderFuel(); renderStatement();
+  toast(added + " invoice" + (added === 1 ? "" : "s") + " added" +
+    (dupes ? " · " + dupes + " already loaded" + (enriched ? " (" + enriched + " gained gallons)" : "") : "") + ".");
+}
+
+// ---------- minimal XLSX reader: unzip + sheet XML -> 2D array ----------
+// A .xlsx is a zip; DecompressionStream inflates its entries, DOMParser
+// reads the sheet. Only what a WFS report needs — shared strings, inline
+// strings, and plain values.
+async function xlsxRows(buf) {
+  const dv = new DataView(buf), u8 = new Uint8Array(buf);
+  let eocd = -1;
+  for (let i = u8.length - 22; i >= Math.max(0, u8.length - 65558); i--) {
+    if (dv.getUint32(i, true) === 0x06054b50) { eocd = i; break; }
+  }
+  if (eocd < 0) throw new Error("not a zip");
+  const count = dv.getUint16(eocd + 10, true);
+  let off = dv.getUint32(eocd + 16, true);
+  const files = {};
+  for (let i = 0; i < count && dv.getUint32(off, true) === 0x02014b50; i++) {
+    const method = dv.getUint16(off + 10, true);
+    const csize = dv.getUint32(off + 20, true);
+    const nlen = dv.getUint16(off + 28, true);
+    const elen = dv.getUint16(off + 30, true);
+    const clen = dv.getUint16(off + 32, true);
+    const lho = dv.getUint32(off + 42, true);
+    files[new TextDecoder().decode(u8.subarray(off + 46, off + 46 + nlen))] = { method, csize, lho };
+    off += 46 + nlen + elen + clen;
+  }
+  async function readEntry(name) {
+    const f = files[name];
+    if (!f) return null;
+    const nl = dv.getUint16(f.lho + 26, true), el = dv.getUint16(f.lho + 28, true);
+    const comp = u8.subarray(f.lho + 30 + nl + el, f.lho + 30 + nl + el + f.csize);
+    if (f.method === 0) return new TextDecoder().decode(comp);
+    const out = await new Response(new Blob([comp]).stream().pipeThrough(new DecompressionStream("deflate-raw"))).arrayBuffer();
+    return new TextDecoder().decode(out);
+  }
+  const xml = (s) => new DOMParser().parseFromString(s, "application/xml");
+  const shared = [];
+  const sharedSrc = await readEntry("xl/sharedStrings.xml");
+  if (sharedSrc) {
+    for (const si of xml(sharedSrc).getElementsByTagName("si")) {
+      let t = "";
+      for (const tn of si.getElementsByTagName("t")) t += tn.textContent;
+      shared.push(t);
+    }
+  }
+  const sheetSrc = await readEntry("xl/worksheets/sheet1.xml");
+  if (!sheetSrc) throw new Error("no sheet");
+  const rows = [];
+  for (const rowEl of xml(sheetSrc).getElementsByTagName("row")) {
+    const vals = [];
+    for (const c of rowEl.getElementsByTagName("c")) {
+      const ref = c.getAttribute("r") || "";
+      let col = 0;
+      for (const ch of ref) {
+        if (ch >= "A" && ch <= "Z") col = col * 26 + (ch.charCodeAt(0) - 64);
+        else if (ch >= "a" && ch <= "z") col = col * 26 + (ch.charCodeAt(0) - 96);
+        else break;
+      }
+      const t = c.getAttribute("t");
+      let v = "";
+      if (t === "inlineStr") {
+        const isEl = c.getElementsByTagName("is")[0];
+        v = isEl ? isEl.textContent : "";
+      } else {
+        const vEl = c.getElementsByTagName("v")[0];
+        v = vEl ? vEl.textContent : "";
+        if (t === "s") v = shared[+v] || "";
+      }
+      vals[(col || vals.length + 1) - 1] = v;
+    }
+    for (let i = 0; i < vals.length; i++) if (vals[i] == null) vals[i] = "";
+    rows.push(vals);
+  }
+  return rows;
 }
 $("attachFuel").addEventListener("click", () => $("fuelFiles").click());
 $("fuelFiles").addEventListener("change", (e) => { handleFuelFiles([...e.target.files]); e.target.value = ""; });
@@ -1390,7 +1552,7 @@ function fuelRowTR(f) {
       "</select></td>" +
       "<td><select data-fam>" +
         '<option value="">' + (fam ? esc(fam) + " (auto)" : "—") + "</option>" +
-        state.families.map((n) => '<option value="' + esc(n) + '"' + (f.familyOverride === n ? " selected" : "") + ">" + esc(n) + "</option>").join("") +
+        billingChoices().map((n) => '<option value="' + esc(n) + '"' + (f.familyOverride === n ? " selected" : "") + ">" + esc(n) + "</option>").join("") +
       "</select></td>" +
       '<td class="hint">' + esc(f.source) + "</td>" +
       '<td><button type="button" class="danger" title="Delete">×</button></td>';
@@ -1570,7 +1732,8 @@ function billDiv(bill, period) {
   for (const l of bill.lines) {
     html += "<tr><td>" + esc(l.date) + "</td><td>" + esc(l.tail) + "</td><td>" + esc(l.airport) +
       '</td><td class="money">' + (l.gallons || "") + '</td><td class="money">' + money(l.total) +
-      "</td><td>" + esc(l.invoiceNumber) + "</td></tr>";
+      "</td><td>" + esc(l.invoiceNumber) +
+      (l.share ? ' <span class="hint">' + esc(l.share) + "</span>" : "") + "</td></tr>";
   }
   html += '<tr class="totalrow"><td colspan="3">Total due — ' + esc(bill.family) + '</td><td class="money">' +
     Math.round(bill.gallons) + '</td><td class="money">' + money(bill.total) + "</td><td></td></tr></table></div>";
@@ -1611,7 +1774,7 @@ function renderBills(months) {
     if (state.billTo && m > state.billTo) return false;
     return true;
   });
-  const bills = FM.familyBills({ lines: inRange }).filter((b) => b.family !== "Unassigned");
+  const bills = FM.familyBills({ lines: inRange }, { families: state.families }).filter((b) => b.family !== "Unassigned");
   $("billsCard").hidden = !bills.length;
   const body = $("billsBody");
   body.innerHTML = "";
@@ -1636,7 +1799,7 @@ function renderPeriods(months, full) {
   $("periodsEmpty").hidden = !!desc.length;
   desc.forEach((m, idx) => {
     const lines = full.lines.filter((l) => (l.date || "").slice(0, 7) === m);
-    const bills = FM.familyBills({ lines }).filter((b) => b.family !== "Unassigned");
+    const bills = FM.familyBills({ lines }, { families: state.families }).filter((b) => b.family !== "Unassigned");
     const monthTotal = lines.reduce((s, l) => s + (l.total || 0), 0);
     const det = document.createElement("details");
     det.className = "period";

@@ -10,6 +10,10 @@ four equal-equity families: **CJIG, VIRTUS, ETAP, ZEMOG**. World Fuel
 Services supplies fuel; Airplane Manager holds the flight log. The app ties
 each World Fuel invoice to whoever was flying that day and produces
 per-family bills. It is in real use — treat the money logic accordingly.
+World Fuel bills arrive as report spreadsheets — an Invoice Manager CSV
+(per-invoice totals) and an Invoice Reporting XLSX (per-line items with
+gallons) — not only PDFs; match.js parses both (parseWfsRows) and
+index.html has a minimal zip/XML reader for XLSX.
 
 ## Architecture
 
@@ -24,7 +28,7 @@ Zero dependencies, no build step. GitHub Pages serves the repo as-is.
   here, with tests. Must stay node-compatible (automation depends on it).
 - `pdf-text.js` — in-browser PDF text extraction (FlateDecode stream scan
   via DecompressionStream, Tj/TJ text ops, printable-ratio guard).
-- `tests/` — `node run_tests.js`, expect exactly `121 passed, 0 failed`.
+- `tests/` — `node run_tests.js`, expect exactly `169 passed, 0 failed`.
 - `.github/workflows/` — push to `main` runs the tests, then deploys Pages.
   Do not modify the workflow; never push with failing tests — a red test
   job blocks the deploy, which is the point.
@@ -40,6 +44,11 @@ Zero dependencies, no build step. GitHub Pages serves the repo as-is.
   guess where money lands.
 - An explicit family choice on a fuel line settles it, whatever its match
   status.
+- Dry-lease flying (log account "DL") is its own billing category — never
+  billed to the four families.
+- Legs on a shared/split account (e.g. "zEqually_Split_Expenses") split
+  equally across the four families in cent-exact shares (splitMoney,
+  largest remainder).
 - Missing-bill check warns only when a month's invoiced gallons fall below
   **70%** of hours × gal/hr — tankering and price-shopping make fuel lumpy,
   so small gaps are normal.
@@ -76,6 +85,12 @@ Zero dependencies, no build step. GitHub Pages serves the repo as-is.
 - A monthly automation (Claude, on the owner's account) emails the owner a
   statement and per-family bill texts parsed from his Gmail; it clones this
   repo and drives `match.js` under node.
+- Invoices merge by invoice number on attach — re-attaching a monthly
+  report never double-bills; the Reporting format enriches gallons on lines
+  the Manager format loaded. Owner strings auto-map only when unambiguous
+  (autoOwnerMap); ambiguous names wait for a human. Some WFS invoices are
+  not fuel at all (hangar rental, misc fees) — they surface for review
+  rather than being guessed.
 
 ## Working on it
 

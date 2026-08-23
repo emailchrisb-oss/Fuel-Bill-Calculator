@@ -358,6 +358,107 @@ async function pdfTests() {
   check("scan-like pdf rejected", !res2.ok);
 }
 
+// ---------- World Fuel report files (fictionalized, real layouts) ----------
+
+// Airplane Manager's real export header: date column says "Date/Time", the
+// owner column says "Account Name", and a zero-filled "Estimate Flight
+// Time" sits ahead of the real one.
+const amHeader = ["Departure Date/Time Local", "Flight (Trip) Number", "Aircraft Tail", "Account Name",
+  "Departure Location (Airport)", "Arrival Location (Airport)", "Landings, Total",
+  "Estimate Flight Time (HR)", "Flight Time (HR)", "Block Time (HR)", "Hobbs Time (HR)",
+  "Fuel Burn (LB)", "Distance (NM)", "Pax Count", "Tags"];
+const amCols = FM.detectColumns(amHeader);
+eq("AM header date", amCols.date, 0);
+eq("AM header tail", amCols.tail, 2);
+eq("AM header owner", amCols.owner, 3);
+eq("AM header from", amCols.from, 4);
+eq("AM header to", amCols.to, 5);
+eq("AM header time skips estimate", amCols.time, 8);
+eq("date with time suffix", FM.parseDateLoose("8/1/26 5:45"), "2026-08-01");
+eq("d-MMM-yy date", FM.parseDateLoose("1-Aug-26"), "2026-08-01");
+eq("yyyy/mm/dd datetime", FM.parseDateLoose("2026/08/15 00:00:00"), "2026-08-15");
+
+// Manager-format CSV: preamble rows, then one row per invoice, no gallons.
+const wfsManagerCSV =
+  "ACME MANAGEMENT LLC - 999999,,,,\n" +
+  "Report Generated Date & Time: 08/21/2026 14:42:52,,,,\n" +
+  "Invoice Number,Invoice Type,Invoice Date,Uplift Date,Tail Number,IATA / ICAO,Currency,Invoice Amount,Balance Due,Status\n" +
+  "11110001-21101,INDIVIDUAL,3-Jun-26,1-Jun-26,N45XX,MKE / KMKE,USD,\"2,213.48\",2213.48,OPEN\n" +
+  "11110002-21101,INDIVIDUAL,6-Jun-26,4-Jun-26,N45XX,EDC / KEDC,USD,405.02,405.02,PAID\n" +
+  ",,,,,,,,,\n";
+const man = FM.parseWfsManagerCSV(wfsManagerCSV);
+eq("manager entry count", man.entries.length, 2);
+eq("manager skipped", man.skipped, 0);
+eq("manager date is uplift date", man.entries[0].date, "2026-06-01");
+eq("manager tail", man.entries[0].tail, "N45XX");
+eq("manager airport prefers ICAO", man.entries[0].airport, "KMKE");
+eq("manager total with comma", man.entries[0].total, 2213.48);
+eq("manager invoice number", man.entries[0].invoiceNumber, "11110001-21101");
+check("manager gallons unknown", man.entries[0].gallons === null);
+eq("wfs sniff", FM.sniffRows(FM.parseCSV(wfsManagerCSV)), "wfs");
+eq("legs sniff", FM.sniffRows([amHeader, ["8/1/26 5:45", "26-1", "N45XX", "Smith", "KEDC", "KMKE", "1", "0", "3.6"]]), "legs");
+
+// Reporting format: one row per line item; invoice total is the sum, and
+// gallons come only from the Fuel-category rows.
+const repHeader = ["CUST NUMBER", "INVOICE DATE", "INVOICE NUMBER", "IATA", "ICAO", "CONS INVOICE NUMBER",
+  "UPLIFT DATE", "FUEL TICKET", "TAIL NUMBER", "FLIGHT NUMBER", "AIRCRAFT", "CATEGORY",
+  "ITEM DESCRIPTION", "QUANTITY", "UNIT PRICE", "EXTENDED AMOUNT", "CURRENCY"];
+const repRows = [
+  ["preamble", "", ""],
+  repHeader,
+  ["999999", "2026/06/03 00:00:00", "11110001-21101", "MKE", "KMKE", "", "2026/06/01 00:00:00", "0001", "N45XX", "", "", "Fuel", "JET FUEL", "383", "5.00", "1915.00", "USD"],
+  ["999999", "2026/06/03 00:00:00", "11110001-21101", "MKE", "KMKE", "", "2026/06/01 00:00:00", "0001", "N45XX", "", "", "Taxes", "SALES TAX - JET FUEL", "1", "298.48", "298.48", "USD"],
+  ["999999", "2026/06/06 00:00:00", "11110002-21101", "EDC", "KEDC", "", "2026/06/04 00:00:00", "0002", "N45XX", "", "", "Fees", "PARKING", "1", "405.02", "405.02", "USD"],
+];
+const rep = FM.parseWfsReportingRows(repRows);
+eq("reporting entry count", rep.entries.length, 2);
+eq("reporting groups line items", rep.entries[0].total, 2213.48);
+eq("reporting gallons from fuel lines only", rep.entries[0].gallons, 383);
+eq("reporting uplift date", rep.entries[0].date, "2026-06-01");
+eq("reporting airport", rep.entries[0].airport, "KMKE");
+check("reporting fees-only invoice has no gallons", rep.entries[1].gallons === null);
+eq("parseWfsRows picks reporting", FM.parseWfsRows(repRows).entries.length, 2);
+eq("parseWfsRows picks manager", FM.parseWfsRows(FM.parseCSV(wfsManagerCSV)).entries[0].total, 2213.48);
+
+// ---------- owner auto-mapping and the two special buckets ----------
+const fams4 = ["CJIG", "VIRTUS", "ETAP", "ZEMOG"];
+eq("auto map management suffix", FM.autoOwnerMap("CJIG Management", fams4), "CJIG");
+eq("auto map llc name", FM.autoOwnerMap("Zemog Investments LLC", fams4), "ZEMOG");
+eq("auto map exact", FM.autoOwnerMap("VIRTUS", fams4), "VIRTUS");
+eq("auto map dry lease", FM.autoOwnerMap("DL", fams4), FM.DRY_LEASE);
+eq("auto map split marker", FM.autoOwnerMap("zEqually_Split_Expenses", fams4), FM.SPLIT_FAMILY);
+eq("auto map shared marker", FM.autoOwnerMap("Shared Expenses", fams4), FM.SPLIT_FAMILY);
+eq("ambiguous name unmapped", FM.autoOwnerMap("Charter Client", fams4), "");
+eq("unknown name unmapped", FM.autoOwnerMap("Bob", fams4), "");
+
+const shares = FM.splitMoney(660.47, 4);
+eq("split shares", shares, [165.12, 165.12, 165.12, 165.11]);
+eq("split sums exactly", Math.round(shares.reduce((s, v) => s + v, 0) * 100), 66047);
+eq("split even amount", FM.splitMoney(100, 4), [25, 25, 25, 25]);
+
+// A shared line lands as a quarter on each family's bill; a dry-lease line
+// stays its own bucket, untouched by the split.
+const splitLines = [
+  { date: "2026-06-01", tail: "N45XX", airport: "KEDC", gallons: 100, total: 660.47, invoiceNumber: "11110003-21101", family: FM.SPLIT_FAMILY },
+  { date: "2026-06-02", tail: "N45XX", airport: "KEDC", gallons: 50, total: 500, invoiceNumber: "11110004-21101", family: "CJIG" },
+  { date: "2026-06-03", tail: "N45XX", airport: "KEDC", gallons: 40, total: 400, invoiceNumber: "11110005-21101", family: FM.DRY_LEASE },
+];
+const splitBills = FM.familyBills({ lines: splitLines }, { families: fams4 });
+eq("split bill families", splitBills.map((b) => b.family).sort(), ["CJIG", FM.DRY_LEASE, "ETAP", "VIRTUS", "ZEMOG"].sort());
+const cjigBill = splitBills.find((b) => b.family === "CJIG");
+eq("cjig gets own line plus quarter", cjigBill.lines.length, 2);
+eq("cjig total includes quarter", cjigBill.total, 665.12);
+const etapBill = splitBills.find((b) => b.family === "ETAP");
+eq("etap only the quarter", etapBill.total, 165.12);
+eq("last family carries the short penny", splitBills.find((b) => b.family === "ZEMOG").total, 165.11);
+check("share note on split line", /1\/4 of \$660\.47/.test(etapBill.lines[0].share || ""));
+const dlBill = splitBills.find((b) => b.family === FM.DRY_LEASE);
+eq("dry lease unsplit", dlBill.total, 400);
+check("bill text carries share note", FM.familyBillText(etapBill, "June").includes("1/4 of $660.47"));
+check("bill csv carries share note", FM.familyBillCSV(etapBill).includes("1/4 of $660.47"));
+// Without the families option nothing is expanded (engine stays backward compatible).
+eq("no opts, no expansion", FM.familyBills({ lines: splitLines }).length, 3);
+
 pdfTests().then(() => {
   console.log(pass + " passed, " + fail + " failed");
   process.exit(fail ? 1 : 0);

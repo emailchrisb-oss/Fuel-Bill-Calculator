@@ -46,14 +46,179 @@
       return -1;
     }
     const notTime = /time|eta|etd|hrs|hours/;
+    // A "Departure Date/Time Local" column is a date column, not a time
+    // column — only exclude time-ish headers that don't also say "date".
+    const notTimeUnlessDate = /^(?!.*date).*(?:time|eta|etd|hrs|hours)/;
     return {
-      date: find([/^date$/, /flight date|dep.*date|departure date|trip date/, /date/], notTime),
+      date: find([/^date$/, /flight date|dep.*date|departure date|trip date/, /date/], notTimeUnlessDate),
       tail: find([/^tail/, /tail|aircraft|reg(istration)?$|n[ -]?number/], /type|model/),
       from: find([/^from$/, /^orig/, /origin|depart(?!.*time)/], notTime),
       to: find([/^to$/, /^dest/, /destination|arriv(?!.*time)/], notTime),
-      owner: find([/owner/, /client|customer|account|charter|lessee/, /passenger|pax(?!.*count)|lead|name/], /count|#|no\./),
-      time: find([/flight.?time|block.?time|duration|hobbs/, /total.?time/, /\b(hrs|hours)\b/], /dep|arr|etd|eta|sched|out\b|off\b|on\b|in\b|local|utc|zulu/),
+      // \bcount\b so "Account Name" survives while "Pax Count" is excluded.
+      owner: find([/owner/, /client|customer|account|charter|lessee/, /passenger|pax(?!.*count)|lead|name/], /\bcount\b|#|no\./),
+      // "estimate" excluded so Airplane Manager's zero-filled "Estimate
+      // Flight Time" column loses to the real "Flight Time" column.
+      time: find([/flight.?time|block.?time|duration|hobbs/, /total.?time/, /\b(hrs|hours)\b/], /dep|arr|etd|eta|sched|estimate|out\b|off\b|on\b|in\b|local|utc|zulu/),
     };
+  }
+
+  // ---------- World Fuel report files ----------
+  // WFS emails the account a spreadsheet, not a PDF: an "Invoice Manager"
+  // CSV (one row per invoice, totals only) and an "Invoice Reporting" export
+  // (one row per line item — fuel, taxes, fees — with gallons). Both carry a
+  // few preamble rows before the real header.
+
+  function findHeaderRow(rows, mustMatch) {
+    for (let i = 0; i < Math.min(rows.length, 8); i++) {
+      const cells = rows[i].map((c) => String(c || "").toLowerCase());
+      if (mustMatch.every((re) => cells.some((c) => re.test(c)))) return i;
+    }
+    return -1;
+  }
+  function colIndex(header, re) {
+    for (let i = 0; i < header.length; i++) {
+      if (re.test(String(header[i] || "").toLowerCase())) return i;
+    }
+    return -1;
+  }
+  // "MKE / KMKE" or "KMKE" -> the ICAO-style code the matcher wants.
+  function airportFromCell(s) {
+    const parts = String(s || "").split("/").map((p) => normAirport(p)).filter(Boolean);
+    if (!parts.length) return "";
+    return parts.reduce((a, b) => (b.length >= a.length ? b : a));
+  }
+
+  // What kind of table is this? "wfs" = a World Fuel invoice report,
+  // "legs" = a flight log, "" = no idea.
+  function sniffRows(rows) {
+    if (findHeaderRow(rows, [/invoice number/, /uplift date|invoice date/, /tail/]) >= 0) return "wfs";
+    const legHdr = findHeaderRow(rows, [/date/, /tail|aircraft|reg/]);
+    if (legHdr >= 0) {
+      const g = detectColumns(rows[legHdr]);
+      if (g.date >= 0 && g.tail >= 0) return "legs";
+    }
+    return "";
+  }
+
+  // Invoice Manager CSV: one row per invoice, "Invoice Amount" totals,
+  // no gallons. Dates like "1-Aug-26"; airports like "MKE / KMKE".
+  function parseWfsManagerCSV(text) {
+    return parseWfsManagerRows(parseCSV(text));
+  }
+  function parseWfsManagerRows(rows) {
+    const h = findHeaderRow(rows, [/invoice number/, /uplift date|invoice date/, /tail/]);
+    if (h < 0) return { entries: [], skipped: 0 };
+    const hdr = rows[h];
+    const cInv = colIndex(hdr, /invoice number/);
+    const cUplift = colIndex(hdr, /uplift date/);
+    const cInvDate = colIndex(hdr, /invoice date/);
+    const cTail = colIndex(hdr, /tail/);
+    const cAirport = colIndex(hdr, /iata|icao|location|airport/);
+    const cAmount = colIndex(hdr, /invoice amount|amount|total/);
+    const entries = [];
+    let skipped = 0;
+    for (const r of rows.slice(h + 1)) {
+      const invoiceNumber = String(r[cInv] || "").trim();
+      const date = parseDateLoose(r[cUplift]) || parseDateLoose(cInvDate >= 0 ? r[cInvDate] : "");
+      const tail = normTail(cTail >= 0 ? r[cTail] : "");
+      const total = parseFloat(String(cAmount >= 0 ? r[cAmount] : "").replace(/[$,]/g, ""));
+      if (!invoiceNumber || !date || !isFinite(total)) { if (r.some((c) => String(c || "").trim())) skipped++; continue; }
+      entries.push({
+        date, tail,
+        airport: airportFromCell(cAirport >= 0 ? r[cAirport] : ""),
+        gallons: null,
+        total,
+        invoiceNumber,
+      });
+    }
+    return { entries, skipped };
+  }
+
+  // Either WFS flavor from a 2D grid: the Reporting export carries a
+  // per-line "Extended Amount" column; the Manager export a per-invoice
+  // "Invoice Amount".
+  function parseWfsRows(rows) {
+    const reporting = rows.slice(0, 8).some((r) => r.some((c) => /extended amount/i.test(String(c || ""))));
+    return reporting ? parseWfsReportingRows(rows) : parseWfsManagerRows(rows);
+  }
+
+  // Invoice Reporting export: one row per line item. Group rows by invoice
+  // number; the invoice total is the sum of the line amounts, and gallons
+  // come from the Fuel-category quantities (UOM is US gallons).
+  function parseWfsReportingRows(rows) {
+    const h = findHeaderRow(rows, [/invoice number/, /uplift date/, /extended amount|amount/]);
+    if (h < 0) return { entries: [], skipped: 0 };
+    const hdr = rows[h];
+    const cInv = colIndex(hdr, /^(?!.*cons).*invoice number/);
+    const cUplift = colIndex(hdr, /uplift date/);
+    const cTail = colIndex(hdr, /tail/);
+    const cIcao = colIndex(hdr, /icao/);
+    const cIata = colIndex(hdr, /iata/);
+    const cCat = colIndex(hdr, /category/);
+    const cDesc = colIndex(hdr, /item description|description/);
+    const cQty = colIndex(hdr, /^quantity/);
+    const cAmt = colIndex(hdr, /extended amount/);
+    const by = {};
+    let skipped = 0;
+    for (const r of rows.slice(h + 1)) {
+      const invoiceNumber = String(r[cInv] || "").trim();
+      const amt = parseFloat(String(r[cAmt] || "").replace(/[$,]/g, ""));
+      if (!invoiceNumber || !isFinite(amt)) { if (r.some((c) => String(c || "").trim())) skipped++; continue; }
+      if (!by[invoiceNumber]) {
+        by[invoiceNumber] = {
+          date: parseDateLoose(cUplift >= 0 ? r[cUplift] : ""),
+          tail: normTail(cTail >= 0 ? r[cTail] : ""),
+          airport: airportFromCell((cIcao >= 0 && r[cIcao]) || (cIata >= 0 && r[cIata]) || ""),
+          gallons: null,
+          total: 0,
+          invoiceNumber,
+        };
+      }
+      const e = by[invoiceNumber];
+      e.total += amt;
+      const isFuel = (cCat >= 0 && /fuel/i.test(String(r[cCat] || ""))) ||
+        (cCat < 0 && cDesc >= 0 && /jet fuel/i.test(String(r[cDesc] || "")));
+      if (isFuel) {
+        const q = parseFloat(String(cQty >= 0 ? r[cQty] : "").replace(/,/g, ""));
+        if (isFinite(q)) e.gallons = (e.gallons || 0) + q;
+      }
+    }
+    const entries = Object.values(by).map((e) => ({ ...e, total: Math.round(e.total * 100) / 100 }));
+    entries.sort((a, b) => ((a.date || "") < (b.date || "") ? -1 : 1));
+    return { entries, skipped };
+  }
+
+  // ---------- who pays: name mapping and the two special buckets ----------
+
+  // The two billing buckets that aren't one of the families: dry-lease
+  // flying is its own category (the lessee's cost, not the owners'), and
+  // "shared/split" expenses divide equally across all families.
+  const SPLIT_FAMILY = "Shared — split equally";
+  const DRY_LEASE = "Dry lease";
+
+  // Guess which family an owner string from the log belongs to. Only
+  // answers when it's unambiguous; "" means a human should map it.
+  function autoOwnerMap(owner, families) {
+    const o = String(owner || "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+    if (!o) return "";
+    if (/^dl$|dry ?lease/.test(o)) return DRY_LEASE;
+    if (/split|shared? ?expens|equal/.test(o)) return SPLIT_FAMILY;
+    const hits = (families || []).filter((f) => {
+      const fam = String(f).toLowerCase();
+      return o === fam || o.split(" ").includes(fam) || o.replace(/ /g, "").includes(fam.replace(/ /g, ""));
+    });
+    return hits.length === 1 ? hits[0] : "";
+  }
+
+  // Split an amount into n cent-exact shares that sum to the original
+  // (largest-remainder: the first shares carry any leftover pennies).
+  function splitMoney(total, n) {
+    const cents = Math.round(total * 100);
+    const base = Math.floor(cents / n);
+    const extra = cents - base * n;
+    const out = [];
+    for (let i = 0; i < n; i++) out.push((base + (i < extra ? 1 : 0)) / 100);
+    return out;
   }
 
   // "2.5", "2:30", or aviation-style "2+30" -> decimal hours; null if unusable.
@@ -79,7 +244,7 @@
     s = String(s).trim();
     const MONTHS = { jan: 1, feb: 2, mar: 3, apr: 4, may: 5, jun: 6, jul: 7, aug: 8, sep: 9, oct: 10, nov: 11, dec: 12 };
     let m;
-    if ((m = s.match(/(\d{4})-(\d{1,2})-(\d{1,2})/))) return iso(+m[1], +m[2], +m[3]);
+    if ((m = s.match(/(\d{4})[-\/](\d{1,2})[-\/](\d{1,2})/))) return iso(+m[1], +m[2], +m[3]);
     if ((m = s.match(/(\d{1,2})\/(\d{1,2})\/(\d{2,4})/))) {
       let y = +m[3]; if (y < 100) y += 2000;
       return iso(y, +m[1], +m[2]);
@@ -1027,18 +1192,32 @@
   // ---------- per-family bills ----------
 
   // Group a statement's lines into one itemized bill per family.
-  function familyBills(statement) {
+  // opts.families (with opts.splitFamily lines present) expands each
+  // shared line into cent-exact equal shares on every family's bill.
+  function familyBills(statement, opts) {
+    const splitName = (opts && opts.splitFamily) || SPLIT_FAMILY;
+    const families = (opts && opts.families) || null;
     const by = {};
+    const add = (fam, line) => { if (!by[fam]) by[fam] = []; by[fam].push(line); };
     for (const l of statement.lines) {
-      if (!by[l.family]) by[l.family] = [];
-      by[l.family].push(l);
+      if (families && families.length > 1 && l.family === splitName) {
+        const shares = splitMoney(l.total, families.length);
+        families.forEach((fam, i) => add(fam, {
+          ...l,
+          total: shares[i],
+          gallons: l.gallons ? Math.round((l.gallons / families.length) * 10) / 10 : 0,
+          share: "1/" + families.length + " of $" + l.total.toFixed(2) + " shared",
+        }));
+        continue;
+      }
+      add(l.family, l);
     }
     return Object.keys(by).sort().map((name) => {
       const lines = by[name];
       return {
         family: name,
         lines: lines,
-        total: lines.reduce((s, l) => s + l.total, 0),
+        total: Math.round(lines.reduce((s, l) => s + l.total, 0) * 100) / 100,
         gallons: lines.reduce((s, l) => s + l.gallons, 0),
       };
     });
@@ -1050,7 +1229,8 @@
       l.date + "  " + l.tail + "  " + (l.airport || "—") +
       (l.gallons ? "  " + l.gallons + " gal" : "") +
       "  $" + l.total.toFixed(2) +
-      (l.invoiceNumber ? "  (inv " + l.invoiceNumber + ")" : ""));
+      (l.invoiceNumber ? "  (inv " + l.invoiceNumber + ")" : "") +
+      (l.share ? "  [" + l.share + "]" : ""));
     return "FUEL BILL — " + bill.family + "\n" +
       "Period: " + (period || "all dates") + "\n" +
       "―――――――――――――――――――――――\n" +
@@ -1064,8 +1244,8 @@
       v = String(v == null ? "" : v);
       return /[",\n]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v;
     };
-    const rows = [["Date", "Tail", "Airport", "Gallons", "Amount", "Invoice #"]];
-    for (const l of bill.lines) rows.push([l.date, l.tail, l.airport, l.gallons, l.total.toFixed(2), l.invoiceNumber]);
+    const rows = [["Date", "Tail", "Airport", "Gallons", "Amount", "Invoice #", "Note"]];
+    for (const l of bill.lines) rows.push([l.date, l.tail, l.airport, l.gallons, l.total.toFixed(2), l.invoiceNumber, l.share || ""]);
     rows.push([]);
     rows.push(["Total due", "", "", Math.round(bill.gallons), bill.total.toFixed(2), ""]);
     return rows.map((r) => r.map(esc).join(",")).join("\n") + "\n";
@@ -1077,6 +1257,8 @@
     matchFuelToLegs, buildStatement, statementCSV, monthlyChecks,
     familyBills, familyBillText, familyBillCSV,
     airportNM, yearlyMiles,
+    sniffRows, parseWfsManagerCSV, parseWfsManagerRows, parseWfsReportingRows, parseWfsRows,
+    autoOwnerMap, splitMoney, SPLIT_FAMILY, DRY_LEASE,
   };
 
   if (typeof module !== "undefined" && module.exports) module.exports = FuelMatch;
